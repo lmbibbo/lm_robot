@@ -46,6 +46,11 @@ public:
     int GetDigits() const { return digits; }
     long GetMagic() const { return magic; }
     bool IsOk(string Symb, long mag ) {
-      return ((Symb==symbol) && (mag == magic))
+      return ((Symb==symbol) && (mag == magic));
+    }
+    
+     // Método para convertir la posición a string
+   string toString() const {
+        return StringFormat("Symbol: %s, Type: %d, Time: %d, Price: %.6f, Volume: %.2f, SL: %.6f, TP: %.6f, Digits: %d, Magic: %d", symbol, type, time, price, volume, stop_loss, take_profit, digits, magic);
     }
 };
