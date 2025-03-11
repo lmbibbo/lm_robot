@@ -4,6 +4,7 @@ class MiPosition {
 private:
     ENUM_POSITION_TYPE type;
     long time;
+    ulong ticket;
     double price;
     double volume;
     double stop_loss;
@@ -17,12 +18,12 @@ public:
     MiPosition() : type(POSITION_TYPE_BUY), time(0), price(0.0), volume(0.0), stop_loss(0.0), take_profit(0.0), symbol(""), digits(0), magic(0) {}
 
     // Método para inicializar la posición desde un ticket
-    bool LoadFromTicket(ulong ticket) {
-        if (!PositionSelectByTicket(ticket)) {
-            Print("Error: No se pudo seleccionar la posición con ticket ", ticket);
+    bool LoadFromTicket(ulong aticket) {
+        if (!PositionSelectByTicket(aticket)) {
+            Print("Error: No se pudo seleccionar la posición con ticket ", aticket);
             return false;
         }
-
+        ticket = aticket;
         type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
         time = PositionGetInteger(POSITION_TIME_MSC);
         price = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -38,6 +39,7 @@ public:
     // Métodos getter
     ENUM_POSITION_TYPE GetType() const { return type; }
     long GetTime() const { return time; }
+    ulong GetTicket() const { return ticket; }
     double GetPrice() const { return price; }
     double GetVolume() const { return volume; }
     double GetStopLoss() const { return stop_loss; }
