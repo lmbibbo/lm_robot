@@ -1,3 +1,4 @@
 *.ex5
 settings.json
 c_cpp_properties.json
+.vscode/temp/temp_@!!@.log
