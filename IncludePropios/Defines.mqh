@@ -19,12 +19,13 @@
 input int InpAverBodyPeriod = 12;                // period for calculating average candlestick size
 input int InpMAPeriod = 5;                       // Trend MA period
 input int InpPeriodRSI = 37;                     // RSI period
-input ENUM_APPLIED_PRICE InpPrice = PRICE_CLOSE; // price type
+input ENUM_APPLIED_PRICE InpPrice = PRICE_CLOSE; // Price type
+input bool ManualClose = true;                  // Define manual close
 
 //--- trade parameters
 input uint InpDuration = 100; // position holding time in bars
 input uint InpMantain = 10;   // Position Mantian during the close position
-input uint InpSL = 200;       // Stop Loss in points
+input uint InpSL = 100;       // Stop Loss in points
 input uint InpTP = 200;       // Take Profit in points
 input uint InpSlippage = 10;  // slippage in points
 //--- money management parameters
@@ -44,6 +45,8 @@ bool ExtCloseByTime = false;      // requires closing by time
 bool ExtCheckPassed = true;      // status checking error
 
 //---  indicator handles
+/*
 int ExtIndicatorHandle = INVALID_HANDLE;
 int ExtTrendMAHandle = INVALID_HANDLE;
 int TrendIndicatorHandle = INVALID_HANDLE;
+*/
