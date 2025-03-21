@@ -24,10 +24,10 @@ input bool ManualClose = true;                  // Define manual close
 
 //--- trade parameters
 input uint InpDuration = 100; // position holding time in bars
-input uint InpMantain = 10;   // Position Mantian during the close position
-input uint InpSL = 600;       // Stop Loss in points
-input uint InpTP = 200;       // Take Profit in points
-input uint InpSread = 100; // Trailing Spread valid in points
+input uint InpMantain = 1;   // Position Mantian during the close position
+input uint InpSL = 150;       // Stop Loss in points
+input uint InpTP = 150;       // Take Profit in points
+input uint InpSread = 50; // Trailing Spread valid in points
 input uint InpSlippage = 10;  // slippage in points
 //--- money management parameters
 input double InpLot = 0.1; // lot
