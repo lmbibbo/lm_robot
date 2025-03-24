@@ -95,7 +95,7 @@ bool Signals::CheckTrend()
       ExtSignalClose = CLOSE_LONG;
       return (true);
    }
-   else if (trend0 == 0 && trend1 == 0)
+/*   else if (trend0 == 0 && trend1 == 0)
    {
       ExtPatternDetected = true;
       ExtSignalOpen = SIGNAL_SELL;
@@ -121,7 +121,7 @@ bool Signals::CheckTrend()
       ExtDirection = DIRECTION_BUY;
       return (true);
    }
-   else if (trend0 > 0 && trend1 > 0) // Dos valores positivos es señal de compra
+ /*  else if (trend0 > 0 && trend1 > 0) // Dos valores positivos es señal de compra
    {
       ExtPatternDetected = true;
       ExtSignalOpen = SIGNAL_BUY;
@@ -132,7 +132,7 @@ bool Signals::CheckTrend()
 
       return (true);
    }
-/*   else if (trend0 > 0) // Dos valores positivos es señal de compra
+  else if (trend0 > 0) // Dos valores positivos es señal de compra
    {
       ExtPatternDetected = true;
       ExtSignalOpen = SIGNAL_BUY;
