@@ -20,11 +20,12 @@ input int InpAverBodyPeriod = 12;                // period for calculating avera
 input int InpMAPeriod = 5;                       // Trend MA period
 input int InpPeriodRSI = 37;                     // RSI period
 input ENUM_APPLIED_PRICE InpPrice = PRICE_CLOSE; // Price type
-input bool ManualClose = true;                  // Define manual close
+input bool ManualClose = true;                  // Manual close?
+input bool OpenSameDir = true;                   //Open Same Direction?
 
 //--- trade parameters
 input uint InpDuration = 100; // position holding time in bars
-input uint InpMantain = 2;   // Position Mantian during the close position
+input uint InpMantain = 4;   // Position Mantian during the close position
 input uint InpSL = 120;       // Stop Loss in points
 input uint InpTP = 150;       // Take Profit in points
 input uint InpSread = 50; // Trailing Spread valid in points
@@ -37,6 +38,7 @@ input long InpMagicNumber = 17504288; // Magic Number
 //--- global variables
 int ExtAvgBodyPeriod;            // average candlestick calculation period
 int ExtSignalOpen = 0;           // Buy/Sell signal
+int ExtPrevSignalOpen = 0;       // Buy/Sell signal
 int ExtSignalClose = 0;          // signal to close a position
 string ExtPatternInfo = "";      // current pattern information
 int ExtDirection = 0;        // position opening direction

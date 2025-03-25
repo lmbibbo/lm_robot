@@ -85,8 +85,11 @@ bool Signals::CheckTrend()
       return (false);
    }
 
-   if (trend0 == 0 && trend1 == 0 && trend2 == 0) // tres ceros en la tendencia indican señal de venta
+   if (trend0 == 0 && trend1 == 0 && trend2 == 0 ) // tres ceros en la tendencia indican señal de venta
    {
+      if(!OpenSameDir && ExtPrevSignalOpen== SIGNAL_BUY)
+         return true;
+        
       ExtPatternDetected = true;
       ExtSignalOpen = SIGNAL_SELL;
 //      ExtSignalOpen = SIGNAL_SELL_SELL_SELL;
@@ -112,13 +115,17 @@ bool Signals::CheckTrend()
       ExtDirection = DIRECTION_SELL;
       return (true);
    }*/
-   if (trend0 > 0 && trend1 > 0 && trend2 > 0) // Dos valores positivos es señal de compra
+   if (trend0 > 0 && trend1 > 0 && trend2 > 0 ) // Dos valores positivos es señal de compra
    {
+      if(!OpenSameDir && ExtPrevSignalOpen== SIGNAL_SELL)
+         return true;
+        
       ExtPatternDetected = true;
       ExtSignalOpen = SIGNAL_BUY;
 //      ExtSignalOpen = SIGNAL_BUY_BUY_BUY;
       ExtPatternInfo="\r\nTres valores positivos es señal de compra";
       ExtDirection = DIRECTION_BUY;
+      ExtSignalClose = CLOSE_SHORT;
       return (true);
    }
  /*  else if (trend0 > 0 && trend1 > 0) // Dos valores positivos es señal de compra
