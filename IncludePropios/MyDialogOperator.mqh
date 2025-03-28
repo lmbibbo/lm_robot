@@ -36,7 +36,7 @@ public:
     MyDialog(void);
     ~MyDialog(void);
 
-    void UpdateValues(const string symbol, const double ask, const double bid);
+    void UpdateValues(const string symbol);
 
     virtual bool Create(const long chart, const string name, const int subwin,
                         const int x1, const int y1, const int x2, const int y2);
@@ -55,7 +55,7 @@ protected:
     bool CreateActionButton(CButton &button, string name, string text, int x, int y);
     bool CreateEdit(CEdit &edit, string name, int x, int y, bool read_only = true);
     bool CreateLabel(CLabel &label, string name, string text, int x, int y);
-    void SetValues(const string symbol, const double ask, const double bid);
+
 };
 
 //+------------------------------------------------------------------+
@@ -168,14 +168,18 @@ bool MyDialog::CreateControls(void)
     if (!CreateActionButton(m_btnAction, "btnAction", "Cerrar", column1_x, current_y))
         return false;
 
+    m_lblSymbolName.Text("Symbol: " + Symbol());
+    m_estado.Text("Estado: " + (estado ? "Activado" : "Desactivado"));
+    m_btnAction.Text((estado ? "Desactivar" : "Activar"));
     return true;
 }
 
 //+------------------------------------------------------------------+
 //| Update values in dialog                                          |
 //+------------------------------------------------------------------+
-void MyDialog::UpdateValues(const string symbol, const double ask, const double bid)
+void MyDialog::UpdateValues(const string symbol)
 {
+    m_estado.Text("Estado: " + (estado ? "Activado" : "Desactivado"));
  /*   m_edtSymbolName.Text(symbol);
     m_edtAsk.Text(DoubleToString(ask, _Digits));
     m_edtBid.Text(DoubleToString(bid, _Digits));*/
