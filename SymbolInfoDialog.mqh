@@ -42,10 +42,11 @@ public:
     void OnButtonActionClicked(void);
     virtual bool OnEvent(const int id, const long &lparam, const double &dparam, const string &sparam);
     void OnClickButtonClose(void);
-
-protected:
     virtual void Minimize(void);
     virtual bool     IsMinimized() {return m_minimized;}
+    
+protected:
+
     bool CreateControls(void);
     bool CreateActionButton(void);
     bool CreateEdit(CEdit &edit, string name, int x, int y, bool read_only = true);
@@ -56,12 +57,23 @@ protected:
 //+------------------------------------------------------------------+
 //| Event Handling                                                   |
 //+------------------------------------------------------------------+
+// Event Map
+
 EVENT_MAP_BEGIN(CSymbolInfoDialog)
 //ON_EVENT(ON_CLICK, m_btnMinimize, Minimize)
 //ON_EVENT(ON_CLICK, m_btnClose, OnClickButtonClose)  
-ON_EVENT(ON_CLICK, m_btnAction, OnClickButtonClose)
+ON_EVENT(ON_CLICK, m_btnAction, OnButtonActionClicked)
 //ON_EVENT(ON_CLICK, m_btnAction, OnButtonActionClicked)
 EVENT_MAP_END(CAppDialog)
+
+/*
+bool CSymbolInfoDialog::OnEvent(const int id,const long& lparam,const double& dparam,const string& sparam) {
+   if(id==(ON_CLICK+CHARTEVENT_CUSTOM) && lparam==m_btnAction.Id()) { 
+   OnButtonActionClicked(); return(true); 
+   }
+//if(id==(ON_CLICK+CHARTEVENT_CUSTOM) && lparam==m_bmpbutton2.Id()) { OnClickBmpButton2(); return(true); }
+return(CAppDialog::OnEvent(id,lparam,dparam,sparam)); }
+*/
 
 //+------------------------------------------------------------------+
 //| Constructor                                                      |

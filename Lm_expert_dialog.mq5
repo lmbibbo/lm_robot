@@ -1,8 +1,6 @@
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
-#property strict
-
 #include "SymbolInfoDialog.mqh"
 
 input int DialogWidth = 250;    // Dialog width
@@ -32,7 +30,7 @@ int OnInit()
         Print("Failed to create dialog!");
         return(INIT_FAILED);
     }
-    
+
     // Make dialog visible
     SymbolDialog.Run();
     
@@ -64,6 +62,17 @@ void OnTick()
         last_update = TimeCurrent();
     }
 }
+
+void OnChartEvent(const int id,
+                  const long &lparam,
+                  const double &dparam,
+                  const string &sparam)
+  {
+//--- controlando del evento
+   SymbolDialog.ChartEvent(id,lparam,dparam,sparam);
+  }
+//+------------------------------------------------------------------
+
 
 //+------------------------------------------------------------------+
 //| Update dialog values                                             |
