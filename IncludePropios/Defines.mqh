@@ -29,10 +29,11 @@ input uint InpDuration = 100; // position holding time in bars
 input uint InpMantain = 4;   // Position Mantian during the close position
 input uint InpSL = 120;       // Stop Loss in points
 input uint InpTP = 150;       // Take Profit in points
+input double InpRisk = 1.5;      // Risk in % of the account balance
 input uint InpSread = 50; // Trailing Spread valid in points
 input uint InpSlippage = 10;  // slippage in points
 //--- money management parameters
-input double InpLot = 0.1; // lot
+input double InpLot = 0.1; // lot.5
 //--- Expert ID
 input long InpMagicNumber = 17504288; // Magic Number
 
