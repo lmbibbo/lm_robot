@@ -31,12 +31,11 @@ private:
 public:
    Signals();            // Constructor
    ~Signals();           // Destructor
-   bool CheckTrend();    // Verifica la tendencia
    bool CheckTunel();    // Verifica el túnel
    bool CheckRsi();      // Verifica el RSI
    bool CheckRsiClose(); // Verifica el Close usando RSI
    bool CheckMagic();    // Verifica el indicador mágico
-   bool CheckAll(double ask, double bid, double open, double high, double low, double close);      // Verifica todos los indicadores
+   bool CheckTrend(bool OpenSameDir);
 
 };
 //+------------------------------------------------------------------+
@@ -70,7 +69,7 @@ Signals::~Signals()
 }
 //+------------------------------------------------------------------+
 
-bool Signals::CheckTrend()
+bool Signals::CheckTrend(bool OpenSameDir )
 {
    bool TrendSignal = false;
    // Add your implementation here
@@ -217,22 +216,4 @@ bool Signals::CheckMagic()
    return true;
 }
 
-bool Signals::CheckAll(double ask, double bid, double open, double high, double low, double close)
-{
-   // Implement the logic for checkAll here
-   // Verifica todos los indicadores
-   bool TrendSignal = CheckTrend();
-   bool TunelSignal = CheckTunel();
-   bool RsiSignal = CheckRsi();
-   bool MagicSignal = CheckMagic();
-
-   if (TrendSignal && TunelSignal && RsiSignal && MagicSignal)
-   {
-      return true;
-   }
-   else
-   {
-      return false;
-   }
-}      
 

@@ -20,10 +20,9 @@ input int InpAverBodyPeriod = 12;                // period for calculating avera
 input int InpMAPeriod = 5;                       // Trend MA period
 input int InpPeriodRSI = 37;                     // RSI period
 input ENUM_APPLIED_PRICE InpPrice = PRICE_CLOSE; // Price type
-input bool ManualClose = true;                  // Manual close?
-input bool OpenSameDir = true;                   //Open Same Direction?
+input bool InpAutomaticClose = false;            // Automatic close?
+input bool InpOpenSameDirection = true;          //Open Same Direction?
 input bool InpEstado = false;                   //Star Estado en False. No opera de entrada
-
 
 //--- trade parameters
 input uint InpDuration = 100; // position holding time in bars
