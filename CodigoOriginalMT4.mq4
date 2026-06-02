@@ -942,7 +942,7 @@ int start() {
 
    if (LastBarTime_Hilo == Time[0]) return (0);
 
-   PrintFormat("LotSoze= %.5f , Time= %s, LastBarTime= %s", lotSize_Hilo, TimeToString(Time[0],TIME_MINUTES), TimeToString(LastBarTime_Hilo,TIME_MINUTES));
+   PrintFormat("LotSize= %.5f , Time= %s, LastBarTime= %s", lotSize_Hilo, TimeToString(Time[0],TIME_MINUTES), TimeToString(LastBarTime_Hilo,TIME_MINUTES));
    Print("Paso 4");
    
    profit_Hilo = CalculateProfit_Hilo();
@@ -961,21 +961,28 @@ int start() {
 
    Print("Paso 6");
    
+   PrintFormat("OrdersTotal()= %d", OrdersTotal());
+   
    // Buscar si existen órdenes abiertas de esta estrategia
-   for (OrderLoopPos_Hilo = OrdersTotal() - 1; OrderLoopPos_Hilo >= 0; OrderLoopPos_Hilo--) {
+   for (OrderLoopPos_Hilo = OrdersTotal()-1; OrderLoopPos_Hilo >= 0; OrderLoopPos_Hilo--) {
       cg = OrderSelect(OrderLoopPos_Hilo, SELECT_BY_POS, MODE_TRADES);
-      if (OrderSymbol() != Symbol() || OrderMagicNumber() != MagicNumber_Hilo) continue;
+      PrintFormat("(OrderSymbol() %s != Symbol() %s || OrderMagicNumber() %d != MagicNumber_Hilo %d", OrderSymbol(), Symbol(),OrderMagicNumber(), MagicNumber_Hilo );
       
-      if (OrderType() == OP_BUY) {
-         HasBuyOrders_Hilo = TRUE;
-         HasSellOrders_Hilo = FALSE;
-         break;
+      if (OrderSymbol() != Symbol()) continue; 
+      Print("Paso por acá...........................");
+      if (OrderMagicNumber() == MagicNumber_Hilo) {
+         if (OrderType() == OP_BUY) {
+            HasBuyOrders_Hilo = TRUE;
+            HasSellOrders_Hilo = FALSE;
+            break;
+         }
+         if (OrderType() == OP_SELL) {
+            HasBuyOrders_Hilo = FALSE;
+            HasSellOrders_Hilo = TRUE;
+            break;
+         }
       }
-      if (OrderType() == OP_SELL) {
-         HasBuyOrders_Hilo = FALSE;
-         HasSellOrders_Hilo = TRUE;
-         break;
-      }
+      PrintFormat("Orden: %d, HasBuyOrders_Hilo: %b, HasSellOrders_Hilo: %b",OrderLoopPos_Hilo, HasBuyOrders_Hilo, HasSellOrders_Hilo);
    }
    
    // Verificar si se pueden abrir coberturas/martingalas adicionales
@@ -1527,6 +1534,7 @@ int OpenPendingOrder_Hilo(int type, double lots, int slippage, string comment_st
       }
       break;
    }
+   PrintFormat("Ticket: %d ", ticket);
    return (ticket);
 }
 
@@ -1925,7 +1933,7 @@ double GetLotSizeBasedOnBalance() {
    }
    
    // Calcular lote final ajustado por riesgo y volatilidad
-   lotSize = NormalizeDouble(((Risk / 1000 * balance) / effectiveStopLoss) * volatilityFactor, lotdecimal);
+   lotSize = NormalizeDouble(((Risk / 1000 * balance) / effectiveStopLoss) * volatilityFactor, 5);
    
    // Validar límites de lote permitidos
    lotSize = MathMax(lotSize, Lots);
