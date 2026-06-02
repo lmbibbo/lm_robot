@@ -13,7 +13,7 @@ bool UseOnlineIndicator = false;
 extern double GeneralStopLoss = 200;
 extern double Lots = 0.01;
 extern double LotExponent = 1.667;
-extern int lotdecimal = 2;
+extern int lotdecimal = 5;
 extern double PipStep = 220.0;
 extern double MaxLots = 9.0;
 extern bool MM = TRUE;
@@ -969,7 +969,6 @@ int start() {
       PrintFormat("(OrderSymbol() %s != Symbol() %s || OrderMagicNumber() %d != MagicNumber_Hilo %d", OrderSymbol(), Symbol(),OrderMagicNumber(), MagicNumber_Hilo );
       
       if (OrderSymbol() != Symbol()) continue; 
-      Print("Paso por acá...........................");
       if (OrderMagicNumber() == MagicNumber_Hilo) {
          if (OrderType() == OP_BUY) {
             HasBuyOrders_Hilo = TRUE;
@@ -982,7 +981,7 @@ int start() {
             break;
          }
       }
-      PrintFormat("Orden: %d, HasBuyOrders_Hilo: %b, HasSellOrders_Hilo: %b",OrderLoopPos_Hilo, HasBuyOrders_Hilo, HasSellOrders_Hilo);
+      PrintFormat("Orden: %d, HasBuyOrders_Hilo: %d, HasSellOrders_Hilo: %d",OrderLoopPos_Hilo, HasBuyOrders_Hilo, HasSellOrders_Hilo);
    }
    
    // Verificar si se pueden abrir coberturas/martingalas adicionales
