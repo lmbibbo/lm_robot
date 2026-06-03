@@ -222,14 +222,14 @@ int init() {
    ObjectSet("Lable1", OBJPROP_CORNER, 2);
    ObjectSet("Lable1", OBJPROP_XDISTANCE, 25);
    ObjectSet("Lable1", OBJPROP_YDISTANCE, 25);
-   g_text_1104 = "THE ALGORITHM";
+   g_text_1104 = "THE LMROBOT";
    ObjectSetText("Lable1", g_text_1104, 12, "Times New Roman", Aqua);
    
    ObjectCreate("Lable", OBJ_LABEL, 0, 0, 1.0);
    ObjectSet("Lable", OBJPROP_CORNER, 2);
    ObjectSet("Lable", OBJPROP_XDISTANCE, 3);
    ObjectSet("Lable", OBJPROP_YDISTANCE, 1);
-   g_text_1096 = " https://thealgorithmco.com ";
+   g_text_1096 = " https://lmrobot.com ";
    ObjectSetText("Lable", g_text_1096, 11, "Times New Roman", DeepSkyBlue);
    
    return (0);
@@ -285,7 +285,7 @@ int deinit() {
    ObjectDelete("Lable1");
    ObjectDelete("Lable2");
    ObjectDelete("Lable3");
-   Comment("https://thealgorithmco.com");
+   Comment("https://lmrobot.com");
    return (0);
 }
 
@@ -338,23 +338,22 @@ int start() {
    if (Lots > MaxLots) Lots = MaxLots;
    
    // Actualizar el comentario del gráfico
-   Comment("\n\nTHE ALGORITHM\n\n\n"
+   Comment("___________________________________________________\n\n\n"
+         + "Broker                                    :" + AccountCompany() + "\n"
+         + "Brokers Time                          :" + TimeToStr(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\n"
          + "___________________________________________________\n\n"
-         + "Broker                                    :" + AccountCompany() + "\n\n"
-         + "Brokers Time                          :" + TimeToStr(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\n\n"
-         + "___________________________________________________\n\n"
-         + "Name                                     :" + AccountName() + "\n\n"
-         + "Account Number                    :" + AccountNumber() + "\n\n"
-         + "Account Currency                  :" + AccountCurrency() + "\n\n"
+         + "Name                                     :" + AccountName() + "\n"
+         + "Account Number                    :" + AccountNumber() + "\n"
+         + "Account Currency                  :" + AccountCurrency() + "\n"
          + "____________________________________________________\n\n"
-         + "Open Orders Fibonacci Focus         :" + CountTrades_Hilo() + "\n\n"
-         + "Open Orders Scalper Pro          :" + CountTrades_15() + "\n\n"
-         + "Open Orders TrendMaster     :" + CountTrades_16() + "\n\n"
-         + "ALL ORDERS                          :" + OrdersTotal() + "\n\n"
+         + "Open Orders Fibonacci Focus         :" + CountTrades_Hilo() + "\n"
+         + "Open Orders Scalper Pro          :" + CountTrades_15() + "\n"
+         + "Open Orders TrendMaster     :" + CountTrades_16() + "\n"
+         + "ALL ORDERS                          :" + OrdersTotal() + "\n"
          + "_____________________________________________________\n\n"
          + "Account BALANCE                  :" + DoubleToStr(AccountBalance(), 2) + "\n\n"
-         + "Account EQUITY                     :" + DoubleToStr(AccountEquity(), 2) + "\n\n\n"
-         + "THE ALGORITHM");
+         + "Account EQUITY                     :" + DoubleToStr(AccountEquity(), 2) + "\n"
+         + "_____________________________________________________\n\n");
          
    AccountBalance_Normalized = NormalizeDouble(AccountBalance(), 2);
    AccountEquity_Normalized = NormalizeDouble(AccountEquity(), 2);
