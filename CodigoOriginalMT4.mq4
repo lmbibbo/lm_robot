@@ -1927,7 +1927,9 @@ double GetLotSizeBasedOnBalance() {
          volatilityFactor = avgAtr / atr;
          volatilityFactor = MathMin(volatilityFactor, 2.0);  // Límite máximo 2x
          volatilityFactor = MathMax(volatilityFactor, 0.3);  // Mínimo 0.3x
+         
       }
+      PrintFormat("avgAtr: %.4f atr:  %.5f VolFactor: %.5f", avgAtr, atr, volatilityFactor );
    }
    
    // Calcular lote final ajustado por riesgo y volatilidad
