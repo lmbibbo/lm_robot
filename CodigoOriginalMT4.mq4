@@ -939,7 +939,11 @@ int start() {
    }
    
 
-   if (LastBarTime_Hilo == Time[0]) return (0);
+   if (LastBarTime_Hilo == Time[0])
+   {
+      Print("LastBarTime_Hilo == Time[0], no se ejecuta ninguna estrategia");
+      return (0);
+   } 
 
    PrintFormat("LotSize= %.5f , Time= %s, LastBarTime= %s", lotSize_Hilo, TimeToString(Time[0],TIME_MINUTES), TimeToString(LastBarTime_Hilo,TIME_MINUTES));
    Print("Paso 4");
@@ -1011,7 +1015,6 @@ int start() {
          Ticket_Hilo = OpenPendingOrder_Hilo(1, NextLotSize_Hilo, slip, StrategyComment_Hilo + "-" + TradeCountForLot_Hilo, MagicNumber_Hilo, 0, HotPink);
          if (Ticket_Hilo < 0) {
             Print("Error 1: ", GetLastError());
-            return (0);
          }
          LastSellPrice_Hilo = FindLastSellPrice_Hilo();
          CanOpenNew_Hilo = FALSE;
@@ -1023,7 +1026,6 @@ int start() {
          Ticket_Hilo = OpenPendingOrder_Hilo(0, NextLotSize_Hilo, slip, StrategyComment_Hilo + "-" + TradeCountForLot_Hilo, MagicNumber_Hilo, 0, Lime);
          if (Ticket_Hilo < 0) {
             Print("Error 2: ", GetLastError());
-            return (0);
          }
          LastBuyPrice_Hilo = FindLastBuyPrice_Hilo();
          CanOpenNew_Hilo = FALSE;
@@ -1047,7 +1049,6 @@ int start() {
                Ticket_Hilo = OpenPendingOrder_Hilo(1, NextLotSize_Hilo, slip, StrategyComment_Hilo + "-" + TradeCountForLot_Hilo, MagicNumber_Hilo, 0, HotPink);
                if (Ticket_Hilo < 0) {
                   Print("Error 3: ", GetLastError());
-                  return (0);
                }
                LastBuyPrice_Hilo = FindLastBuyPrice_Hilo();
                OrderSentFlag_Hilo = TRUE;
@@ -1057,7 +1058,6 @@ int start() {
                Ticket_Hilo = OpenPendingOrder_Hilo(0, NextLotSize_Hilo, slip, StrategyComment_Hilo + "-" + TradeCountForLot_Hilo, MagicNumber_Hilo, 0, Lime);
                if (Ticket_Hilo < 0) {
                   Print("Error 4: ", GetLastError());
-                  return (0);
                }
                LastSellPrice_Hilo = FindLastSellPrice_Hilo();
                OrderSentFlag_Hilo = TRUE;
@@ -1146,6 +1146,7 @@ int start() {
       CurrentTrades_Scalper = CountTrades_15();
       if (CurrentTrades_Scalper == 0) ModifyRequired_Scalper = FALSE;
       
+      PrintFormat("Scalper Paso 1. Ordenes= %d", CurrentTrades_Scalper);      
       for (OrderLoopPos_Scalper = OrdersTotal() - 1; OrderLoopPos_Scalper >= 0; OrderLoopPos_Scalper--) {
          cg = OrderSelect(OrderLoopPos_Scalper, SELECT_BY_POS, MODE_TRADES);
          if (OrderSymbol() != Symbol() || OrderMagicNumber() != g_magic_176_15) continue;
@@ -1162,20 +1163,33 @@ int start() {
          }
       }
       
+      PrintFormat("Scalper Paso 2. OP_BUY= %d", HasBuyOrders_Scalper);      
+      
       if (CurrentTrades_Scalper > 0 && CurrentTrades_Scalper <= MaxTrades_15) {
          RefreshRates();
          LastBuyPrice_Scalper = FindLastBuyPrice_15();
          LastSellPrice_Scalper = FindLastSellPrice_15();
          if (HasBuyOrders_Scalper && LastBuyPrice_Scalper - Ask >= PipStep * Point) CanOpenNew_Scalper = TRUE;
-         if (HasSellOrders_Scalper && Bid - LastSellPrice_Scalper >= PipStep * Point) CanOpenNew_Scalper = TRUE;
-      }
-      
-      if (CurrentTrades_Scalper < 1) {
+          if (HasSellOrders_Scalper && Bid - LastSellPrice_Scalper >= PipStep * Point) CanOpenNew_Scalper = TRUE;
+       }
+       
+       PrintFormat("Scalper Paso 3 grid: CurrentTrades=%d, HasBuy=%d, HasSell=%d, LastBuyPrice=%.5f, LastSellPrice=%.5f, Ask=%.5f, Bid=%.5f, PipStep=%.1f -> CanOpenNew=%d",
+         CurrentTrades_Scalper, HasBuyOrders_Scalper, HasSellOrders_Scalper, LastBuyPrice_Scalper, LastSellPrice_Scalper, Ask, Bid, PipStep, CanOpenNew_Scalper);
+       
+       if (CurrentTrades_Scalper < 1) {
          HasSellOrders_Scalper = FALSE;
          HasBuyOrders_Scalper = FALSE;
          CanOpenNew_Scalper = TRUE;
          EquityAtStart_Scalper = AccountEquity();
+          iclose_scalper_2 = iClose(Symbol(), 0, 2);
+         iclose_scalper_1 = iClose(Symbol(), 0, 1);
+         if (iclose_scalper_2 > iclose_scalper_1)
+            HasSellOrders_Scalper = TRUE;
+         else
+            HasBuyOrders_Scalper = TRUE;
       }
+
+      PrintFormat("Scalper Paso 4: CanOpenNew=%d",CanOpenNew_Scalper);
       
       if (CanOpenNew_Scalper) {
          LastBuyPrice_Scalper = FindLastBuyPrice_15();
@@ -1187,7 +1201,6 @@ int start() {
             Ticket_Scalper = OpenPendingOrder_15(1, NextLotSize_Scalper, slip, StrategyComment_Scalper + "-" + TradeCountForLot_Scalper, g_magic_176_15, 0, HotPink);
             if (Ticket_Scalper < 0) {
                Print("Error 5: ", GetLastError());
-               return (0);
             }
             LastSellPrice_Scalper = FindLastSellPrice_15();
             CanOpenNew_Scalper = FALSE;
@@ -1198,7 +1211,6 @@ int start() {
             Ticket_Scalper = OpenPendingOrder_15(0, NextLotSize_Scalper, slip, StrategyComment_Scalper + "-" + TradeCountForLot_Scalper, g_magic_176_15, 0, Lime);
             if (Ticket_Scalper < 0) {
                Print("Error 6: ", GetLastError());
-               return (0);
             }
             LastBuyPrice_Scalper = FindLastBuyPrice_15();
             CanOpenNew_Scalper = FALSE;
@@ -1209,6 +1221,7 @@ int start() {
    
    // Disparador de nuevas barras para Scalper Pro
    if (LastBarTime_ScalperTrigger != iTime(NULL, Timeframe_Scalper, 0)) {
+      PrintFormat("Scalper newBar trigger -> lastTrigger=%d currentBar=%d", LastBarTime_ScalperTrigger, iTime(NULL, Timeframe_Scalper, 0));
       int total_posSc = OrdersTotal();
       int count_scalper_trades = 0;
       for (int i = total_posSc; i >= 1; i--) {
@@ -1225,11 +1238,13 @@ int start() {
          TradeCountForLot_Scalper = CurrentTrades_Scalper;
          NextLotSize_Scalper = lotSize_Scalper;
          
+         PrintFormat("Scalper newBar firstTrade -> close[2]=%.5f close[1]=%.5f direction=%s lots=%.2f",
+           iclose_scalper_2, iclose_scalper_1, (iclose_scalper_2 > iclose_scalper_1 ? "SELL" : "BUY"), NextLotSize_Scalper);
+         
          if (iclose_scalper_2 > iclose_scalper_1) {
             Ticket_Scalper = OpenPendingOrder_15(1, NextLotSize_Scalper, slip, StrategyComment_Scalper + "-" + TradeCountForLot_Scalper, g_magic_176_15, 0, HotPink);
             if (Ticket_Scalper < 0) {
                Print("Error 7: ", GetLastError());
-               return (0);
             }
             LastBuyPrice_Scalper = FindLastBuyPrice_15();
             OrderSentFlag_Scalper = TRUE;
@@ -1237,13 +1252,17 @@ int start() {
             Ticket_Scalper = OpenPendingOrder_15(0, NextLotSize_Scalper, slip, StrategyComment_Scalper + "-" + TradeCountForLot_Scalper, g_magic_176_15, 0, Lime);
             if (Ticket_Scalper < 0) {
                Print("Error 8: ", GetLastError());
-               return (0);
             }
             LastSellPrice_Scalper = FindLastSellPrice_15();
             OrderSentFlag_Scalper = TRUE;
          }
-         if (Ticket_Scalper > 0) TimeLimit_Scalper = TimeCurrent() + 60.0 * (60.0 * TimeOutHours_Scalper);
+         if (Ticket_Scalper > 0) {
+            TimeLimit_Scalper = TimeCurrent() + 60.0 * (60.0 * TimeOutHours_Scalper);
+            PrintFormat("Scalper newBar orderOK ticket=%d timeLimit=%s", Ticket_Scalper, TimeToStr(TimeLimit_Scalper));
+         }
          CanOpenNew_Scalper = FALSE;
+      } else {
+         PrintFormat("Scalper newBar skip -> scalperTrades=%d totalOrders=%d", count_scalper_trades, total_posSc);
       }
       LastBarTime_ScalperTrigger = iTime(NULL, Timeframe_Scalper, 0);
    }
@@ -1259,7 +1278,10 @@ int start() {
          totalLots_Scalper += OrderLots();
       }
    }
-   if (CurrentTrades_Scalper > 0) AveragePrice_Scalper = NormalizeDouble(AveragePrice_Scalper / totalLots_Scalper, Digits);
+   if (CurrentTrades_Scalper > 0) {
+      AveragePrice_Scalper = NormalizeDouble(AveragePrice_Scalper / totalLots_Scalper, Digits);
+      PrintFormat("Scalper avgPrice -> trades=%d totalLots=%.2f avgPrice=%.5f", CurrentTrades_Scalper, totalLots_Scalper, AveragePrice_Scalper);
+   }
    
    if (OrderSentFlag_Scalper) {
       for (OrderLoopPos_Scalper = OrdersTotal() - 1; OrderLoopPos_Scalper >= 0; OrderLoopPos_Scalper--) {
@@ -1270,11 +1292,13 @@ int start() {
             TakeProfitPrice_Scalper = AveragePrice_Scalper + TakeProfit * Point;
             StopLossPrice_Scalper = AveragePrice_Scalper - StopLossPips_Scalper * Point;
             ModifyRequired_Scalper = TRUE;
+            PrintFormat("Scalper calcSLTP -> orderTicket=%d BUY avg=%.5f SL=%.5f TP=%.5f", OrderTicket(), AveragePrice_Scalper, StopLossPrice_Scalper, TakeProfitPrice_Scalper);
          }
          if (OrderType() == OP_SELL) {
             TakeProfitPrice_Scalper = AveragePrice_Scalper - TakeProfit * Point;
             StopLossPrice_Scalper = AveragePrice_Scalper + StopLossPips_Scalper * Point;
             ModifyRequired_Scalper = TRUE;
+            PrintFormat("Scalper calcSLTP -> orderTicket=%d SELL avg=%.5f SL=%.5f TP=%.5f", OrderTicket(), AveragePrice_Scalper, StopLossPrice_Scalper, TakeProfitPrice_Scalper);
          }
       }
    }
@@ -1284,11 +1308,35 @@ int start() {
          cg = OrderSelect(OrderLoopPos_Scalper, SELECT_BY_POS, MODE_TRADES);
          if (OrderSymbol() != Symbol() || OrderMagicNumber() != g_magic_176_15) continue;
          
+         PrintFormat("Scalper modifyOrder -> ticket=%d currentSL=%.5f currentTP=%.5f newAvg=%.5f newSL=%.5f newTP=%.5f",
+           OrderTicket(), OrderStopLoss(), OrderTakeProfit(), AveragePrice_Scalper, StopLossPrice_Scalper, TakeProfitPrice_Scalper);
+         
          while (!OrderModify(OrderTicket(), AveragePrice_Scalper, OrderStopLoss(), TakeProfitPrice_Scalper, 0, Yellow)) {
+            Print("Scalper modifyOrder retry -> error ", GetLastError());
             Sleep(1000);
             RefreshRates();
          }
+         PrintFormat("Scalper modifyOrder OK -> ticket=%d", OrderTicket());
          OrderSentFlag_Scalper = FALSE;
+      }
+      ModifyRequired_Scalper = FALSE;
+   }
+   
+   // Coverage: actualizar TP de TODAS las órdenes Scalper al promedio actual
+   if (CurrentTrades_Scalper > 0 && TakeProfit > 0) {
+      for (OrderLoopPos_Scalper = OrdersTotal() - 1; OrderLoopPos_Scalper >= 0; OrderLoopPos_Scalper--) {
+         cg = OrderSelect(OrderLoopPos_Scalper, SELECT_BY_POS, MODE_TRADES);
+         if (OrderSymbol() != Symbol() || OrderMagicNumber() != g_magic_176_15) continue;
+         
+         double tp_cover = 0;
+         if (OrderType() == OP_BUY) tp_cover = AveragePrice_Scalper + TakeProfit * Point;
+         else if (OrderType() == OP_SELL) tp_cover = AveragePrice_Scalper - TakeProfit * Point;
+         
+         if (tp_cover > 0 && OrderTakeProfit() != tp_cover) {
+            cg = OrderModify(OrderTicket(), OrderOpenPrice(), OrderStopLoss(), tp_cover, 0, Yellow);
+            PrintFormat("Scalper coverage TP -> ticket=%d type=%s oldTP=%.5f newTP=%.5f result=%d",
+              OrderTicket(), (OrderType()==OP_BUY?"BUY":"SELL"), OrderTakeProfit(), tp_cover, cg);
+         }
       }
    }
    
@@ -1363,7 +1411,6 @@ int start() {
             Ticket_Trend = OpenPendingOrder_16(1, NextLotSize_Trend, slip, StrategyComment_Trend + "-" + TradeCountForLot_Trend, g_magic_176_16, 0, HotPink);
             if (Ticket_Trend < 0) {
                Print("Error 9: ", GetLastError());
-               return (0);
             }
             LastSellPrice_Trend = FindLastSellPrice_16();
             CanOpenNew_Trend = FALSE;
@@ -1374,7 +1421,6 @@ int start() {
             Ticket_Trend = OpenPendingOrder_16(0, NextLotSize_Trend, slip, StrategyComment_Trend + "-" + TradeCountForLot_Trend, g_magic_176_16, 0, Lime);
             if (Ticket_Trend < 0) {
                Print("Error 10: ", GetLastError());
-               return (0);
             }
             LastBuyPrice_Trend = FindLastBuyPrice_16();
             CanOpenNew_Trend = FALSE;
@@ -1406,7 +1452,6 @@ int start() {
                Ticket_Trend = OpenPendingOrder_16(1, NextLotSize_Trend, slip, StrategyComment_Trend + "-" + TradeCountForLot_Trend, g_magic_176_16, 0, HotPink);
                if (Ticket_Trend < 0) {
                   Print("Error 11: ", GetLastError());
-                  return (0);
                }
                LastBuyPrice_Trend = FindLastBuyPrice_16();
                OrderSentFlag_Trend = TRUE;
@@ -1416,7 +1461,6 @@ int start() {
                Ticket_Trend = OpenPendingOrder_16(0, NextLotSize_Trend, slip, StrategyComment_Trend + "-" + TradeCountForLot_Trend, g_magic_176_16, 0, Lime);
                if (Ticket_Trend < 0) {
                   Print("Error 12: ", GetLastError());
-                  return (0);
                }
                LastSellPrice_Trend = FindLastSellPrice_16();
                OrderSentFlag_Trend = TRUE;
@@ -1646,13 +1690,19 @@ int OpenPendingOrder_15(int type, double lots, int slippage, string comment_str,
    int retry_count = 0;
    int max_retries = 100;
    
+   PrintFormat("OpenPendingOrder_15 -> type=%s lots=%.2f slippage=%d magic=%d", (type==0?"BUY":"SELL"), lots, slippage, magic);
+   
    switch (type) {
    case 0: // COMPRA
       for (retry_count = 0; retry_count < max_retries; retry_count++) {
          RefreshRates();
          ticket = OrderSend(Symbol(), OP_BUY, lots, Ask, slippage, 0, 0, comment_str, magic, datetime_val, arrow_color);
          error_code = GetLastError();
-         if (error_code == 0) break;
+         if (error_code == 0) {
+            PrintFormat("OpenPendingOrder_15 -> BUY OK ticket=%d retries=%d", ticket, retry_count);
+            break;
+         }
+         PrintFormat("OpenPendingOrder_15 -> BUY error=%d retry=%d/%d", error_code, retry_count+1, max_retries);
          if (!(error_code == 4 || error_code == 137 || error_code == 146 || error_code == 136)) break;
          Sleep(5000);
       }
@@ -1662,12 +1712,17 @@ int OpenPendingOrder_15(int type, double lots, int slippage, string comment_str,
          RefreshRates();
          ticket = OrderSend(Symbol(), OP_SELL, lots, Bid, slippage, 0, 0, comment_str, magic, datetime_val, arrow_color);
          error_code = GetLastError();
-         if (error_code == 0) break;
+         if (error_code == 0) {
+            PrintFormat("OpenPendingOrder_15 -> SELL OK ticket=%d retries=%d", ticket, retry_count);
+            break;
+         }
+         PrintFormat("OpenPendingOrder_15 -> SELL error=%d retry=%d/%d", error_code, retry_count+1, max_retries);
          if (!(error_code == 4 || error_code == 137 || error_code == 146 || error_code == 136)) break;
          Sleep(5000);
       }
       break;
    }
+   if (ticket <= 0) PrintFormat("OpenPendingOrder_15 -> FAILED type=%s finalError=%d", (type==0?"BUY":"SELL"), error_code);
    return (ticket);
 }
 
