@@ -37,6 +37,7 @@ extern double slip = 3.0;
 // --- Fibonacci Focus ---
 extern string SETT_FIBO = "--- Fibonacci Focus ---";
 extern int MaxTrades_Hilo = 20;
+extern double RiskMultiplier_Hilo = 1.0;
 extern int Magic_Hilo = 10278;
 double StopLossPips_Hilo = 40.0;
 string Comment_Hilo = "Fibonacci Focus/2019";
@@ -45,6 +46,7 @@ string Comment_Hilo = "Fibonacci Focus/2019";
 extern string SETT_SCALPER = "--- Scalper Pro ---";
 extern int MaxTrades_Scalper = 20;
 extern int Magic_Scalper = 22324;
+extern double RiskMultiplier_Scalper = 1.0; // 0.5=conservador, 1.0=default, 2.0=agresivo
 int Timeframe_Scalper = PERIOD_H1;
 double StopLossPips_Scalper = 40.0;
 string Comment_Scalper = "Scalper Pro/2019";
@@ -53,6 +55,7 @@ string Comment_Scalper = "Scalper Pro/2019";
 extern string SETT_TREND = "--- TrendMaster ---";
 extern int MaxTrades_Trend = 20;
 extern int Magic_Trend = 23794;
+extern double RiskMultiplier_Trend = 1.0; // 0.5=conservador, 1.0=default, 2.0=agresivo
 int Timeframe_Trend = PERIOD_H1;
 double StopLossPips_Trend = 40.0;
 string Comment_Trend = "TrendMaster/2019";
@@ -65,18 +68,6 @@ string Comment_Trend = "TrendMaster/2019";
 extern double MaxAllowedATR = 150.0;
 extern int ATR_Period = 14;
 extern int ATR_Timeframe = PERIOD_H1;
-double g_atrValue = 0;
-
-// --- Control de barras ---
-int g_lastBar_Fibo = 0;
-int g_lastBar_Scalper = 0;
-int g_lastBar_Trend = 0;
-int g_lastBarTrigger_Scalper = 0;
-int g_lastBarTrigger_Trend = 0;
-
-// --- Variables panel visual ---
-// (se mantienen igual que el original si se quiere el panel)
-// bool cg = FALSE;
 
 //+------------------------------------------------------------------+
 //| ESTRUCTURA: RESULTADO DEL SCAN DE ÓRDENES (1 solo loop)          |
@@ -99,7 +90,11 @@ struct StrategyState
   };
 
 //+------------------------------------------------------------------+
-//| SCAN ÚNICO: recorre las órdenes UNA VEZ por estrategia           |
+//| Escanea todas las órdenes abiertas del magic indicado y          |
+//| llena el StrategyState con: trades, avgPrice, totalLots,         |
+//| hasBuy/hasSell, lastBuyPrice/lastSellPrice, profit.             |
+//| Un solo loop reemplaza CountTrades + FindLastBuy/FindLastSell  |
+//| + CalculateProfit + CalculateAvgPrice del código original.      |
 //+------------------------------------------------------------------+
 void ScanOrders(int magic, StrategyState &st)
   {
@@ -158,8 +153,81 @@ void ScanOrders(int magic, StrategyState &st)
 //| FUNCIONES AUXILIARES COMUNES                                     |
 //+------------------------------------------------------------------+
 
-double AccountBalance_Normalized;
-double AccountEquity_Normalized;
+//+------------------------------------------------------------------+
+//| FUNCIONES AUXILIARES COMUNES                                     |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+double GetLotExponentByTimeframe(int tf, double riskMultiplier)
+  {
+   double base;
+   switch(tf)
+     {
+      case PERIOD_M1:
+         base = 1.2;
+         break;
+      case PERIOD_M5:
+         base = 1.25;
+         break;
+      case PERIOD_M15:
+         base = 1.35;
+         break;
+      case PERIOD_M30:
+         base = 1.5;
+         break;
+      case PERIOD_H1:
+         base = 1.667;
+         break;
+      case PERIOD_H4:
+         base = 1.8;
+         break;
+      case PERIOD_D1:
+         base = 2.0;
+         break;
+      default:
+         base = 1.5;
+     }
+   double r = MathMax(0.5, MathMin(2.0, riskMultiplier));
+   return NormalizeDouble(MathMax(1.01, base * r), 4);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+double GetPipStepByTimeframe(int tf, double riskMultiplier)
+  {
+   double base;
+   switch(tf)
+     {
+      case PERIOD_M1:
+         base = 40;
+         break;
+      case PERIOD_M5:
+         base = 80;
+         break;
+      case PERIOD_M15:
+         base = 130;
+         break;
+      case PERIOD_M30:
+         base = 180;
+         break;
+      case PERIOD_H1:
+         base = 220;
+         break;
+      case PERIOD_H4:
+         base = 400;
+         break;
+      case PERIOD_D1:
+         base = 700;
+         break;
+      default:
+         base = 220;
+     }
+   double r = MathMax(0.5, MathMin(2.0, riskMultiplier));
+   return NormalizeDouble(MathMax(10, base / r), 1);
+  }
 
 // Contar órdenes de Fibonacci Focus (para panel visual)
 int CountTrades_Hilo()
@@ -210,17 +278,20 @@ int CountTrades_Trend()
   }
 
 //+------------------------------------------------------------------+
-//|                                                                  |
+//| Retorna TRUE si el ATR actual supera MaxAllowedATR.             |
+//| Se usa en GetLotSizeBasedOnBalance para reducir lote en alta     |
+//| volatilidad.                                                     |
 //+------------------------------------------------------------------+
 bool isHighVolatility()
   {
    double atr = iATR(Symbol(), ATR_Timeframe, ATR_Period, 0) / Point;
-   g_atrValue = atr;
    return (atr > MaxAllowedATR);
   }
 
 //+------------------------------------------------------------------+
-//|                                                                  |
+//| Cierra todas las órdenes abiertas del magic number indicado.    |
+//| Recorre de atrás hacia adelante para evitar problemas de         |
+//| índice al cerrar.                                                |
 //+------------------------------------------------------------------+
 void CloseAllOrders(int magic)
   {
@@ -246,7 +317,9 @@ void CloseAllOrders(int magic)
   }
 
 //+------------------------------------------------------------------+
-//|                                                                  |
+//| Envía una orden de mercado (0=BUY, 1=SELL). Reintenta hasta     |
+//| 100 veces si el broker devuelve errores de conexión (4, 137,    |
+//| 146, 136). Retorna ticket o 0 si falla.                         |
 //+------------------------------------------------------------------+
 int SendOrder(int type, double lots, string comment, int magic, color arrow)
   {
@@ -274,71 +347,37 @@ int SendOrder(int type, double lots, string comment, int magic, color arrow)
   }
 
 //+------------------------------------------------------------------+
-//|                                                                  |
+//| Modifica SOLO el TakeProfit de una orden. Consulta               |
+//| OrderOpenPrice() y OrderStopLoss() internamente.                 |
+//| Sin validación previa (como el código original).                 |
 //+------------------------------------------------------------------+
-void ModifySLTP(int ticket, double avgPrice, double sl, double tp)
+void SetTakeProfit(int ticket, double tp)
   {
-// Validar TP contra open price antes de intentar
-   if(tp > 0)
+   if(!OrderSelect(ticket, SELECT_BY_TICKET))
+      return;
+   double price = OrderOpenPrice();
+   double sl = OrderStopLoss();
+   if(OrderModify(ticket, price, sl, tp, 0, Yellow))
      {
-      if(OrderType() == OP_BUY && tp <= avgPrice)
-        {
-         PrintFormat("ModifySLTP skip ticket=%d BUY tp=%.5f <= open=%.5f", ticket, tp, avgPrice);
-         return;
-        }
-      if(OrderType() == OP_SELL && tp >= avgPrice)
-        {
-         PrintFormat("ModifySLTP skip ticket=%d SELL tp=%.5f >= open=%.5f", ticket, tp, avgPrice);
-         return;
-        }
+      PrintFormat("SetTakeProfit OK ticket=%d price=%.5f sl=%.5f tp=%.5f", ticket, price, sl, tp);
      }
-   double stopLevel = MarketInfo(Symbol(), MODE_STOPLEVEL) * Point;
-   double bid = Bid, ask = Ask;
-   double refPrice = (OrderType() == OP_BUY ? ask : bid);
-   double price = (tp > 0 ? tp : sl);
-   if(price > 0)
+   else
      {
-      double refForDist = (OrderType() == OP_BUY ? bid : ask);
-      double dist = MathAbs(price - refForDist);
-      if(dist < stopLevel)
-        {
-         PrintFormat("ModifySLTP skip ticket=%d dist=%.5f < stopLevel=%.5f price=%.5f refPrice=%.5f", ticket, dist, stopLevel, price, refForDist);
-         return;
-        }
-     }
-   int maxRetries = 20;
-   int retry = 0;
-   while(retry < maxRetries)
-     {
-      retry++;
-      RefreshRates();
-      bid = Bid;
-      ask = Ask;
-      if(OrderModify(ticket, avgPrice, sl, tp, 0, Yellow))
-        {
-         PrintFormat("ModifySLTP OK ticket=%d sl=%.5f tp=%.5f avgPrice=%.5f bid=%.5f ask=%.5f", ticket, sl, tp, avgPrice, bid, ask);
-         return;
-        }
       int err = GetLastError();
-      PrintFormat("ModifySLTP retry %d/%d ticket=%d error=%d bid=%.5f ask=%.5f", retry, maxRetries, ticket, err, bid, ask);
-      if(err == 130)
-        {
-         Sleep(1000);
-        }
-      else
-        {
-         Sleep(500);
-         break;
-        }
+      PrintFormat("SetTakeProfit FAIL ticket=%d err=%d price=%.5f sl=%.5f tp=%.5f", ticket, err, price, sl, tp);
      }
-   PrintFormat("ModifySLTP FAILED ticket=%d sl=%.5f tp=%.5f avgPrice=%.5f", ticket, sl, tp, avgPrice);
   }
 
 //+------------------------------------------------------------------+
 //| FUNCIONES DE GESTIÓN DE RIESGO Y MM                              |
 //+------------------------------------------------------------------+
 
-// Trailing stop genérico (por magic number)
+//+------------------------------------------------------------------+
+//| Trailing stop genérico. Mueve el SL de todas las órdenes del    |
+//| magic number cuando el mercado se mueve a favor más de          |
+//| trailStart puntos. El SL se coloca a trailStop puntos del        |
+//| precio actual.                                                   |
+//+------------------------------------------------------------------+
 void TrailingAll(int magic, int trailStart, int trailStop, double avgPrice)
   {
    if(trailStop == 0)
@@ -395,7 +434,11 @@ void TrailingAll(int magic, int trailStart, int trailStop, double avgPrice)
      }
   }
 
-// Verificar si la pérdida flotante excede los umbrales
+//+------------------------------------------------------------------+
+//| Retorna TRUE si la pérdida flotante total supera umbrales        |
+//| definidos según el lote original. Medida de protección contra    |
+//| pérdidas excesivas.                                              |
+//+------------------------------------------------------------------+
 bool CheckStopOutByFloatingLoss(double originalLot, double totalProfit)
   {
    if(originalLot >= 0.04 && totalProfit <= -4000)
@@ -409,7 +452,12 @@ bool CheckStopOutByFloatingLoss(double originalLot, double totalProfit)
    return false;
   }
 
-// Calcular lote según balance y riesgo (MM)
+//+------------------------------------------------------------------+
+//| Calcula el lote óptimo según AccountBalance y Risk%.            |
+//| Incluye ajuste por volatilidad (ATR): si el ATR actual es       |
+//| mayor que el promedio, reduce el lote (y viceversa).            |
+//| Si la volatilidad supera MaxAllowedATR, retorna 0 (no opera).   |
+//+------------------------------------------------------------------+
 double GetLotSizeBasedOnBalance()
   {
    if(Point <= 0)
@@ -448,7 +496,11 @@ double GetLotSizeBasedOnBalance()
    return (lot);
   }
 
-// Calcular lote según rango de balance (sin MM)
+//+------------------------------------------------------------------+
+//| Calcula lote fijo según rango de balance (sin MM).              |
+//| balance < 5000 → 0.01, < 7000 → 0.02, < 10000 → 0.03,           |
+//| >= 10000 → 0.04.                                                 |
+//+------------------------------------------------------------------+
 double GetLotBasedOnRange()
   {
    double balance = AccountBalance();
@@ -466,6 +518,12 @@ double GetLotBasedOnRange()
 //+------------------------------------------------------------------+
 int init()
   {
+   if(!GlobalVariableCheck("Risk_Hilo"))
+      GlobalVariableSet("Risk_Hilo", RiskMultiplier_Hilo);
+   if(!GlobalVariableCheck("Risk_Scalper"))
+      GlobalVariableSet("Risk_Scalper", RiskMultiplier_Scalper);
+   if(!GlobalVariableCheck("Risk_Trend"))
+      GlobalVariableSet("Risk_Trend", RiskMultiplier_Trend);
    return(0);
   }
 
@@ -514,6 +572,13 @@ void RunFibonacciFocus()
 
 //+------------------------------------------------------------------+
 //| ESTRATEGIA 2: SCALPER PRO                                        |
+//| Grid unidireccional con apertura por cambio de barra.           |
+//| - Primer trade: dirección según iClose[2] vs iClose[1]          |
+//| - Trades siguientes: cuando PipStep se alcanza                   |
+//| - SL/TP se asignan vía SetTakeProfit con OrderOpenPrice() como     |
+//|   precio (no altera precio de apertura)                         |
+//| - Coverage (líneas finales): actualiza TP de TODAS las órdenes  |
+//|   al avgPrice actual cada tick                                   |
 //+------------------------------------------------------------------+
 void RunScalperPro()
   {
@@ -522,114 +587,168 @@ void RunScalperPro()
    static bool s_orderSent = FALSE;
    static bool s_priceSync = TRUE;
    static int s_timeLimit = 0;
-   static double s_equityStart = 0;
    static double g_close2 = 0, g_close1 = 0;
    static int g_ticket = -1;
 
    double lotSize;
-   if(MM) lotSize = GetLotSizeBasedOnBalance();
-   else   lotSize = GetLotBasedOnRange();
+   if(MM)
+      lotSize = GetLotSizeBasedOnBalance();
+   else
+      lotSize = GetLotBasedOnRange();
 
    StrategyState st;
    ScanOrders(Magic_Scalper, st);
 
-   if(s_priceSync && st.trades > 0) {
-      for(int ps = OrdersTotal() - 1; ps >= 0; ps--) {
-         if(!OrderSelect(ps, SELECT_BY_POS, MODE_TRADES)) continue;
-         if(OrderSymbol() != Symbol() || OrderMagicNumber() != Magic_Scalper) continue;
-         if(MathAbs(OrderOpenPrice() - st.avgPrice) < Point) continue;
+   if(s_priceSync && st.trades > 0)
+     {
+      for(int ps = OrdersTotal() - 1; ps >= 0; ps--)
+        {
+         if(!OrderSelect(ps, SELECT_BY_POS, MODE_TRADES))
+            continue;
+         if(OrderSymbol() != Symbol() || OrderMagicNumber() != Magic_Scalper)
+            continue;
+         if(MathAbs(OrderOpenPrice() - st.avgPrice) < Point)
+            continue;
          double tp_ps = 0;
-         if(OrderType() == OP_BUY) tp_ps = st.avgPrice + TakeProfit * Point;
-         else if(OrderType() == OP_SELL) tp_ps = st.avgPrice - TakeProfit * Point;
-         else continue;
-         ModifySLTP(OrderTicket(), OrderOpenPrice(), OrderStopLoss(), tp_ps);
-      }
+         if(OrderType() == OP_BUY)
+            tp_ps = st.avgPrice + TakeProfit * Point;
+         else
+            if(OrderType() == OP_SELL)
+               tp_ps = st.avgPrice - TakeProfit * Point;
+            else
+               continue;
+         SetTakeProfit(OrderTicket(), tp_ps);
+        }
       s_priceSync = FALSE;
-   }
+     }
 
    if(UseTrailingStop && TrailStop != 0 && st.trades > 0)
       TrailingAll(Magic_Scalper, TrailStart, TrailStop, st.avgPrice);
 
-   if(s_timeLimit > 0 && TimeCurrent() >= s_timeLimit) {
+   if(s_timeLimit > 0 && TimeCurrent() >= s_timeLimit)
+     {
       CloseAllOrders(Magic_Scalper);
       s_orderSent = FALSE;
       s_timeLimit = 0;
-   }
+     }
 
-   if(s_lastBar != Time[0]) {
+   if(s_lastBar != Time[0])
+     {
       s_lastBar = Time[0];
 
-      if(UseEquityStop && st.trades > 0 && CheckStopOutByFloatingLoss(lotSize, st.profit)) {
+      if(UseEquityStop && st.trades > 0 && CheckStopOutByFloatingLoss(lotSize, st.profit))
+        {
          CloseAllOrders(Magic_Scalper);
          s_orderSent = FALSE;
          return;
-      }
+        }
 
-      if(st.trades == 0) s_orderSent = FALSE;
+      if(st.trades == 0)
+         s_orderSent = FALSE;
 
       bool canOpen = FALSE;
-      if(st.trades > 0 && st.trades <= MaxTrades_Scalper) {
+      if(st.trades > 0 && st.trades <= MaxTrades_Scalper)
+        {
          RefreshRates();
-         if(st.hasBuy && st.lastBuyPrice - Ask >= PipStep * Point) canOpen = TRUE;
-         if(st.hasSell && Bid - st.lastSellPrice >= PipStep * Point) canOpen = TRUE;
-      }
+         if(st.hasBuy && st.lastBuyPrice - Ask >= PipStep * Point)
+            canOpen = TRUE;
+         if(st.hasSell && Bid - st.lastSellPrice >= PipStep * Point)
+            canOpen = TRUE;
+        }
 
-      if(st.trades < 1) {
+      if(st.trades < 1)
+        {
          canOpen = TRUE;
          g_close2 = iClose(Symbol(), 0, 2);
          g_close1 = iClose(Symbol(), 0, 1);
          st.hasBuy = (g_close2 <= g_close1);
          st.hasSell = (g_close2 > g_close1);
-         s_equityStart = AccountEquity();
-      }
+        }
 
-      if(canOpen) {
+      if(canOpen)
+        {
          double nextLot = NormalizeDouble(lotSize * MathPow(LotExponent, st.trades), lotdecimal);
-         if(st.hasSell) { RefreshRates(); g_ticket = SendOrder(1, nextLot, Comment_Scalper + "-" + st.trades, Magic_Scalper, HotPink); }
-         else if(st.hasBuy) { g_ticket = SendOrder(0, nextLot, Comment_Scalper + "-" + st.trades, Magic_Scalper, Lime); }
-         if(g_ticket > 0) { s_orderSent = TRUE; s_timeLimit = TimeCurrent() + (int)(3600 * 48); }
-      }
-   }
+         if(st.hasSell)
+           {
+            RefreshRates();
+            g_ticket = SendOrder(1, nextLot, Comment_Scalper + "-" + st.trades, Magic_Scalper, HotPink);
+           }
+         else
+            if(st.hasBuy)
+              {
+               g_ticket = SendOrder(0, nextLot, Comment_Scalper + "-" + st.trades, Magic_Scalper, Lime);
+              }
+         if(g_ticket > 0)
+           {
+            s_orderSent = TRUE;
+            s_timeLimit = TimeCurrent() + (int)(3600 * 48);
+           }
+        }
+     }
 
    int currentBarScalper = iTime(NULL, Timeframe_Scalper, 0);
-   if(s_lastBarTrigger != currentBarScalper) {
+   if(s_lastBarTrigger != currentBarScalper)
+     {
       s_lastBarTrigger = currentBarScalper;
-      if(st.trades < 1) {
+      if(st.trades < 1)
+        {
          g_close2 = iClose(Symbol(), 0, 2);
          g_close1 = iClose(Symbol(), 0, 1);
-         if(g_close2 > g_close1) g_ticket = SendOrder(1, lotSize, Comment_Scalper + "-0", Magic_Scalper, HotPink);
-         else g_ticket = SendOrder(0, lotSize, Comment_Scalper + "-0", Magic_Scalper, Lime);
-         if(g_ticket > 0) { s_orderSent = TRUE; s_timeLimit = TimeCurrent() + (int)(3600 * 48); }
-      }
-   }
+         if(g_close2 > g_close1)
+            g_ticket = SendOrder(1, lotSize, Comment_Scalper + "-0", Magic_Scalper, HotPink);
+         else
+            g_ticket = SendOrder(0, lotSize, Comment_Scalper + "-0", Magic_Scalper, Lime);
+         if(g_ticket > 0)
+           {
+            s_orderSent = TRUE;
+            s_timeLimit = TimeCurrent() + (int)(3600 * 48);
+           }
+        }
+     }
 
    ScanOrders(Magic_Scalper, st);
 
-   if(s_orderSent && st.trades > 0) {
-      for(int i = OrdersTotal() - 1; i >= 0; i--) {
-         if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
-         if(OrderSymbol() != Symbol() || OrderMagicNumber() != Magic_Scalper) continue;
+   if(s_orderSent && st.trades > 0)
+     {
+      for(int i = OrdersTotal() - 1; i >= 0; i--)
+        {
+         if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+            continue;
+         if(OrderSymbol() != Symbol() || OrderMagicNumber() != Magic_Scalper)
+            continue;
          double tps = 0;
-         if(OrderType() == OP_BUY) tps = st.avgPrice + TakeProfit * Point;
-         else if(OrderType() == OP_SELL) tps = st.avgPrice - TakeProfit * Point;
-         else continue;
-         ModifySLTP(OrderTicket(), OrderOpenPrice(), OrderStopLoss(), tps);
-      }
+         if(OrderType() == OP_BUY)
+            tps = st.avgPrice + TakeProfit * Point;
+         else
+            if(OrderType() == OP_SELL)
+               tps = st.avgPrice - TakeProfit * Point;
+            else
+               continue;
+         SetTakeProfit(OrderTicket(), tps);
+        }
       s_orderSent = FALSE;
-   }
+     }
 
-   if(st.trades > 0 && TakeProfit > 0) {
-      for(int pos = OrdersTotal() - 1; pos >= 0; pos--) {
-         if(!OrderSelect(pos, SELECT_BY_POS, MODE_TRADES)) continue;
-         if(OrderSymbol() != Symbol() || OrderMagicNumber() != Magic_Scalper) continue;
+   if(st.trades > 0 && TakeProfit > 0)
+     {
+      for(int pos = OrdersTotal() - 1; pos >= 0; pos--)
+        {
+         if(!OrderSelect(pos, SELECT_BY_POS, MODE_TRADES))
+            continue;
+         if(OrderSymbol() != Symbol() || OrderMagicNumber() != Magic_Scalper)
+            continue;
          double tpc = 0;
-         if(OrderType() == OP_BUY) tpc = st.avgPrice + TakeProfit * Point;
-         else if(OrderType() == OP_SELL) tpc = st.avgPrice - TakeProfit * Point;
-         else continue;
+         if(OrderType() == OP_BUY)
+            tpc = st.avgPrice + TakeProfit * Point;
+         else
+            if(OrderType() == OP_SELL)
+               tpc = st.avgPrice - TakeProfit * Point;
+            else
+               continue;
          if(tpc > 0 && MathAbs(OrderTakeProfit() - tpc) > Point/2)
-            ModifySLTP(OrderTicket(), OrderOpenPrice(), OrderStopLoss(), tpc);
-      }
-   }
+            SetTakeProfit(OrderTicket(), tpc);
+        }
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -650,7 +769,9 @@ void RunTrendMaster()
   }
 
 //+------------------------------------------------------------------+
-//| start() — UN SOLO return(0) al final                             |
+//| start() — Punto de entrada principal del EA.                    |
+//| Muestra panel informativo en pantalla y ejecuta las estrategias. |
+//| NOTA: Un solo return(0) al final (no hay return intermedios).   |
 //+------------------------------------------------------------------+
 int start()
   {
@@ -672,9 +793,6 @@ int start()
            + "Account EQUITY                     :" + DoubleToStr(AccountEquity(), 2) + "\n"
            + "_____________________________________________________\n\n");
 
-   AccountBalance_Normalized = NormalizeDouble(AccountBalance(), 2);
-   AccountEquity_Normalized = NormalizeDouble(AccountEquity(), 2);
-
    RunScalperPro();
 
    return (0);
@@ -695,7 +813,7 @@ int start()
 //    CalculateProfit, CalculateAvgPrice → se fusionan en 1 solo ScanOrders
 //
 // c) Código duplicado entre estrategias (casi idéntico con diferentes magic)
-//    → se extrae a funciones comunes (ScanOrders, SendOrder, ModifySLTP, CloseAllOrders)
+//    → se extrae a funciones comunes (ScanOrders, SendOrder, SetTakeProfit, CloseAllOrders)
 //
 // d) Variables redundantes: cada estrategia tiene su propia copia de
 //    TakeProfitPrice, StopLossPrice, Slippage, SpreadPoints, etc.
