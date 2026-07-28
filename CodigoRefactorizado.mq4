@@ -298,15 +298,19 @@ void ModifySLTP(int ticket, double avgPrice, double sl, double tp)
    double price = (tp > 0 ? tp : sl);
    if(price > 0)
      {
-      double dist = MathAbs(price - refPrice);
+      double refForDist = (OrderType() == OP_BUY ? bid : ask);
+      double dist = MathAbs(price - refForDist);
       if(dist < stopLevel)
         {
-         PrintFormat("ModifySLTP skip ticket=%d dist=%.5f < stopLevel=%.5f price=%.5f refPrice=%.5f", ticket, dist, stopLevel, price, refPrice);
+         PrintFormat("ModifySLTP skip ticket=%d dist=%.5f < stopLevel=%.5f price=%.5f refPrice=%.5f", ticket, dist, stopLevel, price, refForDist);
          return;
         }
      }
-   for(int retry = 0; retry < 3; retry++)
+   int maxRetries = 20;
+   int retry = 0;
+   while(retry < maxRetries)
      {
+      retry++;
       RefreshRates();
       bid = Bid;
       ask = Ask;
@@ -316,14 +320,15 @@ void ModifySLTP(int ticket, double avgPrice, double sl, double tp)
          return;
         }
       int err = GetLastError();
-      PrintFormat("ModifySLTP retry %d/3 ticket=%d error=%d bid=%.5f ask=%.5f", retry+1, ticket, err, bid, ask);
+      PrintFormat("ModifySLTP retry %d/%d ticket=%d error=%d bid=%.5f ask=%.5f", retry, maxRetries, ticket, err, bid, ask);
       if(err == 130)
         {
-         Sleep(100);
+         Sleep(1000);
         }
       else
         {
          Sleep(500);
+         break;
         }
      }
    PrintFormat("ModifySLTP FAILED ticket=%d sl=%.5f tp=%.5f avgPrice=%.5f", ticket, sl, tp, avgPrice);
@@ -537,7 +542,7 @@ void RunScalperPro()
          if(OrderType() == OP_BUY) tp_ps = st.avgPrice + TakeProfit * Point;
          else if(OrderType() == OP_SELL) tp_ps = st.avgPrice - TakeProfit * Point;
          else continue;
-         ModifySLTP(OrderTicket(), st.avgPrice, OrderStopLoss(), tp_ps);
+         ModifySLTP(OrderTicket(), OrderOpenPrice(), OrderStopLoss(), tp_ps);
       }
       s_priceSync = FALSE;
    }
@@ -608,7 +613,7 @@ void RunScalperPro()
          if(OrderType() == OP_BUY) tps = st.avgPrice + TakeProfit * Point;
          else if(OrderType() == OP_SELL) tps = st.avgPrice - TakeProfit * Point;
          else continue;
-         ModifySLTP(OrderTicket(), st.avgPrice, OrderStopLoss(), tps);
+         ModifySLTP(OrderTicket(), OrderOpenPrice(), OrderStopLoss(), tps);
       }
       s_orderSent = FALSE;
    }
