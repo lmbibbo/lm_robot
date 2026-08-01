@@ -16,9 +16,8 @@
 //+------------------------------------------------------------------+
 extern double Lots = 0.01;
 extern double GeneralStopLoss = 200;
-extern double LotExponent = 1.667;
 extern int lotdecimal = 5;
-extern double PipStep = 220.0;
+extern double PipStepATRMultiplier = 2.0;
 extern double MaxLots = 9.0;
 extern bool MM = TRUE;
 extern double Risk = 1.0;
@@ -39,6 +38,7 @@ extern string SETT_FIBO = "--- Fibonacci Focus ---";
 extern int MaxTrades_Hilo = 20;
 extern double RiskMultiplier_Hilo = 1.0;
 extern int Magic_Hilo = 10278;
+extern int Timeframe_Hilo = PERIOD_M1;
 double StopLossPips_Hilo = 40.0;
 string Comment_Hilo = "Fibonacci Focus/2019";
 
@@ -47,8 +47,8 @@ extern string SETT_SCALPER = "--- Scalper Pro ---";
 extern int MaxTrades_Scalper = 20;
 extern int Magic_Scalper = 22324;
 extern double RiskMultiplier_Scalper = 1.0; // 0.5=conservador, 1.0=default, 2.0=agresivo
-int Timeframe_Scalper = PERIOD_H1;
-double StopLossPips_Scalper = 40.0;
+int Timeframe_Scalper = PERIOD_M1;
+// double StopLossPips_Scalper = 40.0;
 string Comment_Scalper = "Scalper Pro/2019";
 
 // --- TrendMaster ---
@@ -154,10 +154,6 @@ void ScanOrders(int magic, StrategyState &st)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| FUNCIONES AUXILIARES COMUNES                                     |
-//+------------------------------------------------------------------+
-
-//+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
 double GetLotExponentByTimeframe(int tf, double riskMultiplier)
@@ -194,39 +190,36 @@ double GetLotExponentByTimeframe(int tf, double riskMultiplier)
   }
 
 //+------------------------------------------------------------------+
-//|                                                                  |
+//| Calcula PipStep dinámico basado en ATR del timeframe indicado.   |
+//| PipStep = ATR_en_puntos * PipStepATRMultiplier.                  |
+//| Ajusta por riskMultiplier: a mayor riesgo, menor PipStep.        |
+//| Mínimo 10 puntos para evitar grids demasiado densos.             |
 //+------------------------------------------------------------------+
 double GetPipStepByTimeframe(int tf, double riskMultiplier)
   {
-   double base;
+   double atr = iATR(Symbol(), tf, 14, 0);
+   double pipStep = MathMax(10, atr / Point * PipStepATRMultiplier);
+   double r = MathMax(0.5, MathMin(2.0, riskMultiplier));
+   return NormalizeDouble(pipStep / r, 1);
+  }
+
+//+------------------------------------------------------------------+
+//| Retorna TakeProfit en puntos según timeframe (tabla fija).       |
+//| Timeframes cortos → TP ajustado, largos → TP amplio.            |
+//+------------------------------------------------------------------+
+double GetTakeProfitByTimeframe(int tf)
+  {
    switch(tf)
      {
-      case PERIOD_M1:
-         base = 40;
-         break;
-      case PERIOD_M5:
-         base = 80;
-         break;
-      case PERIOD_M15:
-         base = 130;
-         break;
-      case PERIOD_M30:
-         base = 180;
-         break;
-      case PERIOD_H1:
-         base = 220;
-         break;
-      case PERIOD_H4:
-         base = 400;
-         break;
-      case PERIOD_D1:
-         base = 700;
-         break;
-      default:
-         base = 220;
+      case PERIOD_M1:  return 30;
+      case PERIOD_M5:  return 50;
+      case PERIOD_M15: return 70;
+      case PERIOD_M30: return 80;
+      case PERIOD_H1:  return 100;
+      case PERIOD_H4:  return 150;
+      case PERIOD_D1:  return 300;
+      default:         return 80;
      }
-   double r = MathMax(0.5, MathMin(2.0, riskMultiplier));
-   return NormalizeDouble(MathMax(10, base / r), 1);
   }
 
 // Contar órdenes de Fibonacci Focus (para panel visual)
@@ -275,6 +268,25 @@ int CountTrades_Trend()
          count++;
      }
    return (count);
+  }
+
+//+------------------------------------------------------------------+
+//| Retorna el nombre corto del timeframe (M1, M5, H1, D1, ...).    |
+//+------------------------------------------------------------------+
+string TfToString(int tf)
+  {
+   switch(tf)
+     {
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_D1:  return "D1";
+      case PERIOD_W1:  return "W1";
+      default:         return "?";
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -349,23 +361,23 @@ int SendOrder(int type, double lots, string comment, int magic, color arrow)
 //+------------------------------------------------------------------+
 //| Modifica SOLO el TakeProfit de una orden. Consulta               |
 //| OrderOpenPrice() y OrderStopLoss() internamente.                 |
-//| Sin validación previa (como el código original).                 |
+//| Reintenta hasta lograrlo (como el bucle while original).         |
 //+------------------------------------------------------------------+
 void SetTakeProfit(int ticket, double tp)
   {
    if(!OrderSelect(ticket, SELECT_BY_TICKET))
+     {
+      Print("SetTakeProfit: ticket no encontrado ", ticket);
       return;
-   double price = OrderOpenPrice();
-   double sl = OrderStopLoss();
-   if(OrderModify(ticket, price, sl, tp, 0, Yellow))
-     {
-      PrintFormat("SetTakeProfit OK ticket=%d price=%.5f sl=%.5f tp=%.5f", ticket, price, sl, tp);
      }
-   else
+   while(!OrderModify(ticket, OrderOpenPrice(), OrderStopLoss(), tp, 0, Yellow))
      {
-      int err = GetLastError();
-      PrintFormat("SetTakeProfit FAIL ticket=%d err=%d price=%.5f sl=%.5f tp=%.5f", ticket, err, price, sl, tp);
+      Sleep(1000);
+      RefreshRates();
+      if(!OrderSelect(ticket, SELECT_BY_TICKET))
+         return;
      }
+   PrintFormat("SetTakeProfit OK ticket=%d price=%.5f sl=%.5f tp=%.5f", ticket, OrderOpenPrice(), OrderStopLoss(), tp);
   }
 
 //+------------------------------------------------------------------+
@@ -457,8 +469,10 @@ bool CheckStopOutByFloatingLoss(double originalLot, double totalProfit)
 //| Incluye ajuste por volatilidad (ATR): si el ATR actual es       |
 //| mayor que el promedio, reduce el lote (y viceversa).            |
 //| Si la volatilidad supera MaxAllowedATR, retorna 0 (no opera).   |
+//| Usa GetLotExponentByTimeframe(tf, riskMultiplier) en vez del    |
+//| LotExponent fijo de los inputs.                                 |
 //+------------------------------------------------------------------+
-double GetLotSizeBasedOnBalance()
+double GetLotSizeBasedOnBalance(int tf, double riskMultiplier)
   {
    if(Point <= 0)
       return (0);
@@ -474,7 +488,7 @@ double GetLotSizeBasedOnBalance()
    if(atr > 0)
      {
       double atrPoints = atr / Point;
-      stopLoss = MathMax(GeneralStopLoss, atrPoints * LotExponent);
+      stopLoss = MathMax(GeneralStopLoss, atrPoints * GetLotExponentByTimeframe(tf, riskMultiplier));
      }
    double lot = NormalizeDouble((Risk / 1000.0 * balance) / stopLoss, 5);
    if(atr > 0)
@@ -514,6 +528,80 @@ double GetLotBasedOnRange()
   }
 
 //+------------------------------------------------------------------+
+//| Dibuja el panel informativo con OBJ_LABEL. Se llama desde init() |
+//| (para que aparezca al adjuntar el EA aunque no haya ticks) y     |
+//| desde start() para actualizar valores en cada tick.              |
+//+------------------------------------------------------------------+
+void DrawPanel()
+  {
+   // Mercado abierto = broker permite operar Y se siguen formando
+   // barras M1 (si la última barra tiene más de 5 min, está cerrado).
+   bool marketOpen = (MarketInfo(Symbol(), MODE_TRADEALLOWED) > 0);
+   if(marketOpen && TimeCurrent() - iTime(Symbol(), PERIOD_M1, 0) > 300)
+      marketOpen = FALSE;
+   string status = marketOpen ? "ABIERTO" : "CERRADO";
+   color clr = marketOpen ? Lime : Red;
+
+   ObjectsDeleteAll(0, "panel_");
+   int y = 10, s = 18;
+   ObjectCreate("panel_h1", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_h1", "___________________________________________________", 10, "Consolas", White);
+   ObjectSet("panel_h1", OBJPROP_CORNER, 0); ObjectSet("panel_h1", OBJPROP_XDISTANCE, 10); ObjectSet("panel_h1", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_broker", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_broker", "Broker                     : " + AccountCompany(), 10, "Consolas", White);
+   ObjectSet("panel_broker", OBJPROP_CORNER, 0); ObjectSet("panel_broker", OBJPROP_XDISTANCE, 10); ObjectSet("panel_broker", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_time", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_time", "Time                        : " + TimeToStr(TimeCurrent(), TIME_DATE|TIME_SECONDS), 10, "Consolas", White);
+   ObjectSet("panel_time", OBJPROP_CORNER, 0); ObjectSet("panel_time", OBJPROP_XDISTANCE, 10); ObjectSet("panel_time", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_market", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_market", "Market                    : " + status, 10, "Consolas", clr);
+   ObjectSet("panel_market", OBJPROP_CORNER, 0); ObjectSet("panel_market", OBJPROP_XDISTANCE, 10); ObjectSet("panel_market", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_spread", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_spread", "Spread                     : " + IntegerToString(MarketInfo(Symbol(), MODE_SPREAD)), 10, "Consolas", White);
+   ObjectSet("panel_spread", OBJPROP_CORNER, 0); ObjectSet("panel_spread", OBJPROP_XDISTANCE, 10); ObjectSet("panel_spread", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_h2", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_h2", "___________________________________________________", 10, "Consolas", White);
+   ObjectSet("panel_h2", OBJPROP_CORNER, 0); ObjectSet("panel_h2", OBJPROP_XDISTANCE, 10); ObjectSet("panel_h2", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_name", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_name", "Name                       : " + AccountName(), 10, "Consolas", White);
+   ObjectSet("panel_name", OBJPROP_CORNER, 0); ObjectSet("panel_name", OBJPROP_XDISTANCE, 10); ObjectSet("panel_name", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_acc", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_acc", "Account                    : " + AccountNumber(), 10, "Consolas", White);
+   ObjectSet("panel_acc", OBJPROP_CORNER, 0); ObjectSet("panel_acc", OBJPROP_XDISTANCE, 10); ObjectSet("panel_acc", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_cur", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_cur", "Currency                   : " + AccountCurrency(), 10, "Consolas", White);
+   ObjectSet("panel_cur", OBJPROP_CORNER, 0); ObjectSet("panel_cur", OBJPROP_XDISTANCE, 10); ObjectSet("panel_cur", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_h3", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_h3", "___________________________________________________", 10, "Consolas", White);
+   ObjectSet("panel_h3", OBJPROP_CORNER, 0); ObjectSet("panel_h3", OBJPROP_XDISTANCE, 10); ObjectSet("panel_h3", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_scalper", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_scalper", "Scalper Pro [" + TfToString(Timeframe_Scalper) + "] : " + CountTrades_Scalper(), 10, "Consolas", White);
+   ObjectSet("panel_scalper", OBJPROP_CORNER, 0); ObjectSet("panel_scalper", OBJPROP_XDISTANCE, 10); ObjectSet("panel_scalper", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_fibo", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_fibo", "Fibonacci Focus [" + TfToString(Timeframe_Hilo) + "] : " + CountTrades_Hilo(), 10, "Consolas", White);
+   ObjectSet("panel_fibo", OBJPROP_CORNER, 0); ObjectSet("panel_fibo", OBJPROP_XDISTANCE, 10); ObjectSet("panel_fibo", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_trend", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_trend", "TrendMaster [" + TfToString(Timeframe_Trend) + "] : " + CountTrades_Trend(), 10, "Consolas", White);
+   ObjectSet("panel_trend", OBJPROP_CORNER, 0); ObjectSet("panel_trend", OBJPROP_XDISTANCE, 10); ObjectSet("panel_trend", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_all", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_all", "ALL ORDERS                   : " + OrdersTotal(), 10, "Consolas", White);
+   ObjectSet("panel_all", OBJPROP_CORNER, 0); ObjectSet("panel_all", OBJPROP_XDISTANCE, 10); ObjectSet("panel_all", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_h4", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_h4", "___________________________________________________", 10, "Consolas", White);
+   ObjectSet("panel_h4", OBJPROP_CORNER, 0); ObjectSet("panel_h4", OBJPROP_XDISTANCE, 10); ObjectSet("panel_h4", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_bal", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_bal", "BALANCE                    : " + DoubleToStr(AccountBalance(), 2), 10, "Consolas", White);
+   ObjectSet("panel_bal", OBJPROP_CORNER, 0); ObjectSet("panel_bal", OBJPROP_XDISTANCE, 10); ObjectSet("panel_bal", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_eq", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_eq", "EQUITY                       : " + DoubleToStr(AccountEquity(), 2), 10, "Consolas", White);
+   ObjectSet("panel_eq", OBJPROP_CORNER, 0); ObjectSet("panel_eq", OBJPROP_XDISTANCE, 10); ObjectSet("panel_eq", OBJPROP_YDISTANCE, y); y += s;
+   ObjectCreate("panel_h5", OBJ_LABEL, 0, 0, 0);
+   ObjectSetText("panel_h5", "___________________________________________________", 10, "Consolas", White);
+   ObjectSet("panel_h5", OBJPROP_CORNER, 0); ObjectSet("panel_h5", OBJPROP_XDISTANCE, 10); ObjectSet("panel_h5", OBJPROP_YDISTANCE, y);
+   WindowRedraw();
+  }
+
+//+------------------------------------------------------------------+
 //| init()                                                           |
 //+------------------------------------------------------------------+
 int init()
@@ -524,6 +612,12 @@ int init()
       GlobalVariableSet("Risk_Scalper", RiskMultiplier_Scalper);
    if(!GlobalVariableCheck("Risk_Trend"))
       GlobalVariableSet("Risk_Trend", RiskMultiplier_Trend);
+   DrawPanel();
+   PrintFormat("Market check: tradeAllowed=%d now=%s lastM1=%s diffSec=%d",
+     MarketInfo(Symbol(), MODE_TRADEALLOWED),
+     TimeToStr(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+     TimeToStr(iTime(Symbol(), PERIOD_M1, 0), TIME_DATE|TIME_SECONDS),
+     TimeCurrent() - iTime(Symbol(), PERIOD_M1, 0));
    return(0);
   }
 
@@ -532,6 +626,7 @@ int init()
 //+------------------------------------------------------------------+
 int deinit()
   {
+   ObjectsDeleteAll(0, "panel_");
    return(0);
   }
 
@@ -592,7 +687,7 @@ void RunScalperPro()
 
    double lotSize;
    if(MM)
-      lotSize = GetLotSizeBasedOnBalance();
+      lotSize = GetLotSizeBasedOnBalance(Timeframe_Scalper, 1.0);
    else
       lotSize = GetLotBasedOnRange();
 
@@ -611,10 +706,10 @@ void RunScalperPro()
             continue;
          double tp_ps = 0;
          if(OrderType() == OP_BUY)
-            tp_ps = st.avgPrice + TakeProfit * Point;
+            tp_ps = st.avgPrice + GetTakeProfitByTimeframe(Timeframe_Scalper) * Point;
          else
             if(OrderType() == OP_SELL)
-               tp_ps = st.avgPrice - TakeProfit * Point;
+               tp_ps = st.avgPrice - GetTakeProfitByTimeframe(Timeframe_Scalper) * Point;
             else
                continue;
          SetTakeProfit(OrderTicket(), tp_ps);
@@ -650,24 +745,15 @@ void RunScalperPro()
       if(st.trades > 0 && st.trades <= MaxTrades_Scalper)
         {
          RefreshRates();
-         if(st.hasBuy && st.lastBuyPrice - Ask >= PipStep * Point)
+          if(st.hasBuy && st.lastBuyPrice - Ask >= GetPipStepByTimeframe(Timeframe_Scalper, 1.0) * Point)
+             canOpen = TRUE;
+          if(st.hasSell && Bid - st.lastSellPrice >= GetPipStepByTimeframe(Timeframe_Scalper, 1.0) * Point)
             canOpen = TRUE;
-         if(st.hasSell && Bid - st.lastSellPrice >= PipStep * Point)
-            canOpen = TRUE;
-        }
-
-      if(st.trades < 1)
-        {
-         canOpen = TRUE;
-         g_close2 = iClose(Symbol(), 0, 2);
-         g_close1 = iClose(Symbol(), 0, 1);
-         st.hasBuy = (g_close2 <= g_close1);
-         st.hasSell = (g_close2 > g_close1);
         }
 
       if(canOpen)
         {
-         double nextLot = NormalizeDouble(lotSize * MathPow(LotExponent, st.trades), lotdecimal);
+          double nextLot = NormalizeDouble(lotSize * MathPow(GetLotExponentByTimeframe(Timeframe_Scalper, 1.0), st.trades), lotdecimal);
          if(st.hasSell)
            {
             RefreshRates();
@@ -686,6 +772,8 @@ void RunScalperPro()
         }
      }
 
+   // Único punto de primera entrada: nueva barra del timeframe de la
+   // estrategia. El bloque de grid arriba solo añade por PipStep.
    int currentBarScalper = iTime(NULL, Timeframe_Scalper, 0);
    if(s_lastBarTrigger != currentBarScalper)
      {
@@ -718,10 +806,10 @@ void RunScalperPro()
             continue;
          double tps = 0;
          if(OrderType() == OP_BUY)
-            tps = st.avgPrice + TakeProfit * Point;
+            tps = st.avgPrice + GetTakeProfitByTimeframe(Timeframe_Scalper) * Point;
          else
             if(OrderType() == OP_SELL)
-               tps = st.avgPrice - TakeProfit * Point;
+               tps = st.avgPrice - GetTakeProfitByTimeframe(Timeframe_Scalper) * Point;
             else
                continue;
          SetTakeProfit(OrderTicket(), tps);
@@ -729,7 +817,7 @@ void RunScalperPro()
       s_orderSent = FALSE;
      }
 
-   if(st.trades > 0 && TakeProfit > 0)
+   if(st.trades > 0 && GetTakeProfitByTimeframe(Timeframe_Scalper) > 0)
      {
       for(int pos = OrdersTotal() - 1; pos >= 0; pos--)
         {
@@ -739,10 +827,10 @@ void RunScalperPro()
             continue;
          double tpc = 0;
          if(OrderType() == OP_BUY)
-            tpc = st.avgPrice + TakeProfit * Point;
+            tpc = st.avgPrice + GetTakeProfitByTimeframe(Timeframe_Scalper) * Point;
          else
             if(OrderType() == OP_SELL)
-               tpc = st.avgPrice - TakeProfit * Point;
+               tpc = st.avgPrice - GetTakeProfitByTimeframe(Timeframe_Scalper) * Point;
             else
                continue;
          if(tpc > 0 && MathAbs(OrderTakeProfit() - tpc) > Point/2)
@@ -775,26 +863,9 @@ void RunTrendMaster()
 //+------------------------------------------------------------------+
 int start()
   {
-   string marketStatus = (MarketInfo(Symbol(), MODE_TRADEALLOWED) > 0) ? "ABIERTO" : "CERRADO";
-   Comment("___________________________________________________\n\n\n"
-           + "Broker                                    :" + AccountCompany() + "\n"
-           + "Brokers Time                          :" + TimeToStr(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\n"
-           + "Market                                    :" + marketStatus + "\n"
-           + "Spread                                    :" + IntegerToString(MarketInfo(Symbol(), MODE_SPREAD)) + "\n"
-           + "___________________________________________________\n\n"
-           + "Name                                     :" + AccountName() + "\n"
-           + "Account Number                    :" + AccountNumber() + "\n"
-           + "Account Currency                  :" + AccountCurrency() + "\n"
-           + "____________________________________________________\n\n"
-           + "Open Orders Scalper Pro          :" + CountTrades_Scalper() + "\n"
-           + "ALL ORDERS                          :" + OrdersTotal() + "\n"
-           + "_____________________________________________________\n\n"
-           + "Account BALANCE                  :" + DoubleToStr(AccountBalance(), 2) + "\n\n"
-           + "Account EQUITY                     :" + DoubleToStr(AccountEquity(), 2) + "\n"
-           + "_____________________________________________________\n\n");
+   DrawPanel();
 
    RunScalperPro();
-
    return (0);
   }
 
