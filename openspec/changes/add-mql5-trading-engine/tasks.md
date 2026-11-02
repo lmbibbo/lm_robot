@@ -33,12 +33,12 @@
 
 ## 5. Risk policy
 
-- [ ] 5.1 Implementar lote inicial por fórmula de riesgo y clamp al broker; verificar el caso balance 10.000, riesgo 0.5%, SL 40 pips y valor 10 por pip por lote (resultado 0.12)
-- [ ] 5.2 Implementar pérdida proyectada y rechazo del paso de grid; verificar que un paso que excede el 2% del balance no se envía
-- [ ] 5.3 Implementar topes de volumen por orden, por canasta y de pasos; verificar cada tope de forma independiente
-- [ ] 5.4 Implementar límite diario persistente por cuenta y día del servidor; verificar que sobrevive a un reinicio simulado
-- [ ] 5.5 Implementar la prioridad gestión sobre apertura; verificar que con el límite diario activo un cierre por SL se ejecuta igual
-- [ ] 5.6 Documentar el modelo de riesgo, cada cap y su fórmula en `docs/riesgo.md`; verificar que aparecen todos los parámetros de la tabla del design
+- [x] 5.1 Implementar lote inicial por fórmula de riesgo y clamp al broker; verificar el caso balance 10.000, riesgo 0.5%, SL 40 pips y valor 10 por pip por lote (resultado 0.12)
+- [x] 5.2 Implementar pérdida proyectada y rechazo del paso de grid; verificar que un paso que excede el 2% del balance no se envía
+- [x] 5.3 Implementar topes de volumen por orden, por canasta y de pasos; verificar cada tope de forma independiente
+- [x] 5.4 Implementar límite diario persistente por cuenta y día del servidor; verificar que sobrevive a un reinicio simulado
+- [x] 5.5 Implementar la prioridad gestión sobre apertura; verificar que con el límite diario activo un cierre por SL se ejecuta igual
+- [x] 5.6 Documentar el modelo de riesgo, cada cap y su fórmula en `docs/riesgo.md`; verificar que aparecen todos los parámetros de la tabla del design
 
 ## 6. Paridad de señales (Scalper)
 

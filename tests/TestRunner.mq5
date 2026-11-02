@@ -9,6 +9,8 @@
 #include "../Include/LmRobot/Core/MarketContext.mqh"
 #include "../Include/LmRobot/Core/BasketState.mqh"
 #include "../Include/LmRobot/Execution/Executor.mqh"
+#include "../Include/LmRobot/Risk/RiskPolicy.mqh"
+#include "../Include/LmRobot/Risk/DailyLossGuard.mqh"
 
 //--- Fuerza un fallo para verificar que el runner realmente falla.
 input bool InjectFailure = false;
@@ -551,6 +553,278 @@ void TestExecutorMarginCheck()
   }
 
 //+------------------------------------------------------------------+
+//| 5.1 Lote inicial por riesgo y clamp al broker.                   |
+//+------------------------------------------------------------------+
+void TestRiskInitialLot()
+  {
+   AssertEqualDouble(LmInitialLot(10000.0, 0.5, 40.0, 10.0, 0.01, 0.01, 100.0),
+                     0.12, 1e-9,
+                     "lote inicial 10000, 0.5%, 40 pips y 10 por pip = 0.12");
+   AssertEqualDouble(LmInitialLot(100.0, 0.5, 40.0, 10.0, 0.01, 0.01, 100.0),
+                     0.01, 1e-9,
+                     "un lote debajo del minimo se eleva al minimo del broker");
+   AssertEqualDouble(LmInitialLot(1000000.0, 0.5, 40.0, 10.0, 0.01, 0.01, 0.20),
+                     0.20, 1e-9,
+                     "un lote encima del maximo se acota al maximo del broker");
+   AssertEqualDouble(LmInitialLot(10000.0, 0.5, 0.0, 10.0, 0.01, 0.01, 100.0),
+                     0.0, 1e-9,
+                     "un stop loss cero no produce lote");
+
+   RiskConfig config = LmDefaultRiskConfig();
+   config.maxLotPerOrder        = 1.0;
+   config.maxVolumePerStrategy  = 1.0;
+
+   RiskStepPlan plan;
+   AssertTrue(LmPlanInitialOrder(config, 10000.0, 10.0, 0.01, 0.01, 100.0, plan),
+              "la primera orden cabe en el presupuesto de canasta");
+   AssertEqualDouble(plan.volume, 0.12, 1e-9,
+                     "la primera orden usa el lote calculado por riesgo");
+   AssertEqualInt((int)plan.decision, (int)RISK_DECISION_OPEN_FIRST,
+                  "la primera orden se marca como apertura");
+
+   RiskConfig tiny = LmDefaultRiskConfig();
+   AssertTrue(!LmPlanInitialOrder(tiny, 100.0, 10.0, 0.01, 0.01, 100.0, plan),
+              "el minimo del broker que excede el presupuesto rechaza la apertura");
+   AssertEqualInt((int)plan.decision, (int)RISK_DECISION_REJECT,
+                  "la apertura rechazada no se envia");
+   AssertTrue(plan.reason != "", "el rechazo de apertura registra el motivo");
+  }
+
+//+------------------------------------------------------------------+
+//| 5.2 Perdida proyectada y rechazo del paso de grid.               |
+//+------------------------------------------------------------------+
+void TestRiskProjectedLoss()
+  {
+   AssertEqualDouble(LmProjectedLoss(0.30, 40.0, 10.0), 120.0, 1e-9,
+                     "perdida proyectada de 0.30 lotes a 40 pips");
+   AssertEqualDouble(LmBasketLossBudget(10000.0, 2.0), 200.0, 1e-9,
+                     "presupuesto del 2% sobre 10000");
+   AssertTrue(LmFitsBasketBudget(200.0, 10000.0, 2.0),
+              "una perdida igual al presupuesto cabe");
+   AssertTrue(!LmFitsBasketBudget(200.01, 10000.0, 2.0),
+              "una perdida encima del presupuesto no cabe");
+
+   RiskConfig config = LmDefaultRiskConfig();
+   config.maxLotPerOrder       = 10.0;
+   config.maxVolumePerStrategy = 10.0;
+   config.maxGridSteps         = 10;
+
+   RiskStepPlan plan;
+   AssertTrue(LmPlanGridOrder(config, 10000.0, 10.0, 0.30, 1, 0.10,
+                              0.01, 0.01, 100.0, plan),
+              "un paso dentro del presupuesto se acepta");
+   AssertEqualDouble(plan.volume, 0.10, 1e-9,
+                     "el paso aceptado conserva su volumen");
+   AssertEqualDouble(plan.projectedLoss, 160.0, 1e-9,
+                     "la perdida proyectada suma el volumen existente");
+   AssertEqualInt((int)plan.decision, (int)RISK_DECISION_OPEN_GRID,
+                  "el paso aceptado se marca como grid");
+
+   AssertTrue(!LmPlanGridOrder(config, 10000.0, 10.0, 0.45, 1, 0.10,
+                               0.01, 0.01, 100.0, plan),
+              "un paso que excede el 2% del balance se rechaza");
+   AssertEqualInt((int)plan.decision, (int)RISK_DECISION_REJECT,
+                  "el paso rechazado no se envia");
+   AssertEqualDouble(plan.volume, 0.0, 1e-9,
+                     "el paso rechazado no expone volumen");
+   AssertTrue(plan.reason != "", "el rechazo por presupuesto registra el motivo");
+  }
+
+//+------------------------------------------------------------------+
+//| 5.3 Topes independientes de volumen por orden, canasta y pasos.  |
+//+------------------------------------------------------------------+
+void TestRiskVolumeAndStepCaps()
+  {
+   AssertEqualDouble(LmCapVolumePerOrder(0.50, 0.10), 0.10, 1e-9,
+                     "el tope por orden recorta el volumen");
+   AssertEqualDouble(LmCapVolumePerOrder(0.05, 0.10), 0.05, 1e-9,
+                     "un volumen debajo del tope por orden no se altera");
+   AssertEqualDouble(LmCapVolumePerBasket(0.20, 0.25, 0.30), 0.05, 1e-9,
+                     "el tope por canasta usa solo el remanente");
+   AssertEqualDouble(LmCapVolumePerBasket(0.10, 0.30, 0.30), 0.0, 1e-9,
+                     "una canasta llena no admite mas volumen");
+   AssertTrue(LmMaxStepsReached(4, 4), "el tope de pasos se alcanza en el maximo");
+   AssertTrue(!LmMaxStepsReached(3, 4), "un paso debajo del maximo sigue habilitado");
+   AssertEqualDouble(LmGridLot(0.02, 1.5, 2), 0.045, 1e-9,
+                     "lote del paso 2 con multiplicador 1.5");
+
+   RiskConfig config = LmDefaultRiskConfig();
+   config.maxBasketLossPct     = 100.0;
+   config.maxVolumePerStrategy = 10.0;
+   config.maxGridSteps         = 10;
+
+   RiskStepPlan plan;
+   config.maxLotPerOrder = 0.10;
+   AssertTrue(LmPlanGridOrder(config, 10000.0, 10.0, 0.0, 1, 0.50,
+                              0.01, 0.01, 100.0, plan),
+              "el paso se acepta tras aplicar el tope por orden");
+   AssertEqualDouble(plan.volume, 0.10, 1e-9,
+                     "el tope por orden limita el paso de grid");
+
+   config.maxLotPerOrder       = 10.0;
+   config.maxVolumePerStrategy = 0.30;
+   AssertTrue(LmPlanGridOrder(config, 10000.0, 10.0, 0.25, 2, 0.20,
+                              0.01, 0.01, 100.0, plan),
+              "el paso se acepta tras aplicar el tope por canasta");
+   AssertEqualDouble(plan.volume, 0.05, 1e-9,
+                     "el tope por canasta limita el paso de grid");
+
+   config.maxVolumePerStrategy = 10.0;
+   config.maxGridSteps         = 4;
+   AssertTrue(!LmPlanGridOrder(config, 10000.0, 10.0, 0.20, 4, 0.10,
+                               0.01, 0.01, 100.0, plan),
+              "con el tope de pasos alcanzado no se planifica otro paso");
+   AssertEqualInt((int)plan.decision, (int)RISK_DECISION_REJECT,
+                  "el tope de pasos rechaza el paso");
+  }
+
+//+------------------------------------------------------------------+
+//| Store en memoria que simula el reinicio del terminal.            |
+//+------------------------------------------------------------------+
+class CTestDailyStore : public IDailyStateStore
+  {
+private:
+   string m_keys[];
+   double m_values[];
+
+public:
+   virtual bool Load(const string key, double &value)
+     {
+      for(int i = 0; i < ArraySize(m_keys); i++)
+        {
+         if(m_keys[i] == key)
+           {
+            value = m_values[i];
+            return(true);
+           }
+        }
+
+      value = 0.0;
+      return(false);
+     }
+
+   virtual bool Save(const string key, const double value)
+     {
+      for(int i = 0; i < ArraySize(m_keys); i++)
+        {
+         if(m_keys[i] == key)
+           {
+            m_values[i] = value;
+            return(true);
+           }
+        }
+
+      int index = ArraySize(m_keys);
+      ArrayResize(m_keys, index + 1);
+      ArrayResize(m_values, index + 1);
+
+      m_keys[index]   = key;
+      m_values[index] = value;
+      return(true);
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| 5.4 Limite diario persistente por cuenta y dia del servidor.     |
+//+------------------------------------------------------------------+
+void TestDailyLossGuard()
+  {
+   CTestDailyStore store;
+   CDailyLossGuard guard;
+   AssertTrue(guard.Init(&store, 123456, 4.0), "la guarda diaria se inicializa");
+
+   DailyLossState state;
+   datetime day1 = D'2026.03.10 08:00:00';
+
+   AssertTrue(guard.Evaluate(day1, 10000.0, state),
+              "la primera evaluacion del dia registra la equidad");
+   AssertEqualDouble(state.startEquity, 10000.0, 1e-9,
+                     "la equidad de inicio del dia queda guardada");
+   AssertTrue(!state.blocked, "sin caida no se bloquean las aperturas");
+
+   AssertTrue(guard.Evaluate(day1, 9601.0, state), "evaluacion con caida pequena");
+   AssertTrue(!state.blocked, "una caida debajo del 4% no bloquea");
+
+   AssertTrue(guard.Evaluate(day1, 9590.0, state), "evaluacion con caida sobre el limite");
+   AssertTrue(state.blocked, "una caida superior al 4% bloquea las aperturas");
+   AssertTrue(guard.IsBlocked(), "la guarda conserva el bloqueo");
+
+   //--- Reinicio simulado: misma persistencia, nueva instancia.
+   CDailyLossGuard restarted;
+   AssertTrue(restarted.Init(&store, 123456, 4.0), "la guarda diaria se reinicia");
+   AssertTrue(restarted.Evaluate(day1, 10000.0, state),
+              "tras el reinicio la equidad se recupera");
+   AssertTrue(state.blocked,
+              "el bloqueo diario sobrevive al reinicio aunque la equidad se recupere");
+   AssertEqualDouble(state.startEquity, 10000.0, 1e-9,
+                     "la equidad de inicio sobrevive al reinicio");
+
+   //--- Nuevo dia del servidor: se habilita una nueva referencia.
+   AssertTrue(restarted.Evaluate(D'2026.03.11 00:01:00', 10000.0, state),
+              "la evaluacion del dia siguiente funciona");
+   AssertTrue(!state.blocked, "el dia siguiente vuelve a habilitar aperturas");
+   AssertEqualDouble(state.startEquity, 10000.0, 1e-9,
+                     "el dia siguiente registra su propia equidad de inicio");
+
+   //--- Otra cuenta no hereda el estado de la primera.
+   CDailyLossGuard other;
+   AssertTrue(other.Init(&store, 999999, 4.0), "la guarda de otra cuenta se inicializa");
+   AssertTrue(other.Evaluate(day1, 9590.0, state), "la otra cuenta se evalua");
+   AssertTrue(!state.blocked, "el bloqueo no se comparte entre cuentas");
+
+   //--- Claves y formulas auxiliares.
+   AssertTrue(LmDailyStartKey(123456, day1) !=
+              LmDailyStartKey(123456, D'2026.03.11 00:01:00'),
+              "la clave de inicio cambia con el dia del servidor");
+   AssertTrue(LmDailyStartKey(123456, day1) != LmDailyStartKey(999999, day1),
+              "la clave de inicio cambia con la cuenta");
+   AssertEqualDouble(LmDailyDropPct(10000.0, 9600.0), 4.0, 1e-9,
+                     "la caida porcentual diaria se calcula sobre la equidad inicial");
+   AssertTrue(LmDailyLimitReached(4.0, 4.0), "el limite se alcanza en el umbral");
+  }
+
+//+------------------------------------------------------------------+
+//| 5.5 La gestion tiene prioridad sobre las aperturas.              |
+//+------------------------------------------------------------------+
+void TestRiskManagementPriority()
+  {
+   AssertTrue(LmCanManagePositions(true),
+              "la gestion se permite con el limite diario activo");
+   AssertTrue(LmCanManagePositions(false),
+              "la gestion se permite sin el limite diario");
+
+   AssertTrue(!LmCanOpenNew(true, false, false, true),
+              "el limite diario bloquea solo las aperturas");
+   AssertTrue(!LmCanOpenNew(false, true, false, true),
+              "el spread maximo bloquea las aperturas");
+   AssertTrue(!LmCanOpenNew(false, false, true, true),
+              "la volatilidad alta bloquea las aperturas");
+   AssertTrue(!LmCanOpenNew(false, false, false, false),
+              "la sesion cerrada bloquea las aperturas");
+   AssertTrue(LmCanOpenNew(false, false, false, true),
+              "sin guards activos se permiten aperturas");
+
+   BasketPosition positions[2];
+   positions[0] = MakeBasketPosition(1, 111, "TEST", POSITION_TYPE_BUY, 0.01, 1.1000,
+                                     D'2026.01.02 10:00:00');
+   positions[1] = MakeBasketPosition(2, 111, "TEST", POSITION_TYPE_BUY, 0.02, 1.0990,
+                                     D'2026.01.02 10:05:00');
+
+   SymbolLimits limits = MakeExecutionLimits();
+   CTestExecutionBackend backend(true, true);
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   executor.Init(&backend, &accounts, limits, MakeExecutionConfig());
+
+   ExecutionReport report;
+   AssertEqualInt((int)executor.ModifyBasket(positions, 1.0900, 1.1100, report),
+                  (int)EXECUTION_STATUS_OK,
+                  "la proteccion por SL se aplica igual con el limite diario activo");
+   AssertEqualInt(report.modifiedCount, 2,
+                  "la gestion alcanza toda la canasta aunque las aperturas esten bloqueadas");
+  }
+
+//+------------------------------------------------------------------+
 //| 2.1 Deteccion de pip.                                            |
 //+------------------------------------------------------------------+
 void TestPipDetection()
@@ -694,6 +968,11 @@ void RunTests()
    TestExecutorRetryLimits();
    TestExecutorBasketProtection();
    TestExecutorMarginCheck();
+   TestRiskInitialLot();
+   TestRiskProjectedLoss();
+   TestRiskVolumeAndStepCaps();
+   TestDailyLossGuard();
+   TestRiskManagementPriority();
 
    if(InjectFailure)
       AssertTrue(false, "fallo inyectado a proposito");
