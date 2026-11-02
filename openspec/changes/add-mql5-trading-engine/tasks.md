@@ -10,11 +10,11 @@
 
 ## 2. Market context
 
-- [ ] 2.1 Implementar detección de pip (3/5 dígitos → 10 puntos; 2/4 → 1 punto) en una función que reciba dígitos y punto como parámetros; verificar los cuatro casos con el TestRunner
-- [ ] 2.2 Implementar valor del pip por lote (`tick_value / (tick_size / pip_size)`); verificar el cálculo con un símbolo de 5 dígitos y otro de 4
-- [ ] 2.3 Implementar snapshot por tick (bid, ask, spread, stops level) leído una sola vez; verificar que dos consumidores del mismo tick obtienen el mismo par
-- [ ] 2.4 Crear handles de RSI (timeframe del gráfico, período 14) y ATR (timeframe y período configurables) en `OnInit`, y liberarlos en `OnDeinit`; verificar que el handle es válido y que no se crea ninguno en `OnTick`
-- [ ] 2.5 Implementar flags de spread máximo y volatilidad alta en pips; verificar con valores por encima y por debajo de cada umbral
+- [x] 2.1 Implementar detección de pip (3/5 dígitos → 10 puntos; 2/4 → 1 punto) en una función que reciba dígitos y punto como parámetros; verificar los cuatro casos con el TestRunner
+- [x] 2.2 Implementar valor del pip por lote (`tick_value / (tick_size / pip_size)`); verificar el cálculo con un símbolo de 5 dígitos y otro de 4
+- [x] 2.3 Implementar snapshot por tick (bid, ask, spread, stops level) leído una sola vez; verificar que dos consumidores del mismo tick obtienen el mismo par
+- [x] 2.4 Crear handles de RSI (timeframe del gráfico, período 14) y ATR (timeframe y período configurables) en `OnInit`, y liberarlos en `OnDeinit`; verificar que el handle es válido y que no se crea ninguno en `OnTick`
+- [x] 2.5 Implementar flags de spread máximo y volatilidad alta en pips; verificar con valores por encima y por debajo de cada umbral
 
 ## 3. Basket state
 

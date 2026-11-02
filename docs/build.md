@@ -29,8 +29,10 @@ docs/                    Documentación del proyecto
 openspec/                Planificación del cambio (propuesta, diseño, specs, tareas)
 ```
 
-Los módulos se incluyen con la ruta relativa a `Include/`, por ejemplo
-`#include <LmRobot/Risk/LotSizing.mqh>`.
+Los módulos se incluyen con la ruta relativa a la carpeta `Include/` del repo.
+Como las fuentes viven un nivel por debajo de la raíz, la ruta es
+`#include "../Include/LmRobot/Core/MarketContext.mqh"`. Los `#include` entre
+módulos de `Include/LmRobot` usan rutas relativas a su propio directorio.
 
 ## Compilar el EA
 
