@@ -7,6 +7,7 @@
 #property description "Runner minimo de aserciones para los modulos de lm_robot."
 
 #include "../Include/LmRobot/Core/MarketContext.mqh"
+#include "../Include/LmRobot/Core/BasketState.mqh"
 
 //--- Fuerza un fallo para verificar que el runner realmente falla.
 input bool InjectFailure = false;
@@ -79,6 +80,169 @@ InstrumentInfo MakeFiveDigitInstrument()
    instrument.valid          = true;
 
    return(instrument);
+  }
+
+//+------------------------------------------------------------------+
+//| Posicion sintetica para pruebas de la canasta.                   |
+//+------------------------------------------------------------------+
+BasketPosition MakeBasketPosition(const ulong ticket, const long magic, const string symbol,
+                                  const ENUM_POSITION_TYPE type, const double volume,
+                                  const double openPrice, const datetime openTime,
+                                  const double profit = 0.0, const double swap = 0.0,
+                                  const double commission = 0.0)
+  {
+   BasketPosition position;
+
+   position.ticket     = ticket;
+   position.magic      = magic;
+   position.symbol     = symbol;
+   position.type       = type;
+   position.volume     = volume;
+   position.openPrice  = openPrice;
+   position.openTime   = openTime;
+   position.profit     = profit;
+   position.swap       = swap;
+   position.commission = commission;
+
+   return(position);
+  }
+
+//+------------------------------------------------------------------+
+//| 3.1 Scan filtrado por simbolo y magic.                           |
+//+------------------------------------------------------------------+
+void TestBasketScanFiltering()
+  {
+   BasketPosition positions[4];
+   positions[0] = MakeBasketPosition(1, 111, "TEST", POSITION_TYPE_BUY, 0.01, 1.1000,
+                                     D'2026.01.02 10:00:00');
+   positions[1] = MakeBasketPosition(2, 222, "TEST", POSITION_TYPE_BUY, 0.50, 1.2000,
+                                     D'2026.01.02 10:01:00');
+   positions[2] = MakeBasketPosition(3, 111, "OTHER", POSITION_TYPE_SELL, 0.50, 1.3000,
+                                     D'2026.01.02 10:02:00');
+   positions[3] = MakeBasketPosition(4, 111, "TEST", POSITION_TYPE_BUY, 0.02, 1.1010,
+                                     D'2026.01.02 10:03:00');
+
+   BasketState basket;
+   AssertTrue(LmAggregateBasket("TEST", 111, positions, basket),
+              "scan de canasta por simbolo y magic");
+   AssertEqualInt(basket.count, 2, "scan ignora posiciones de otro magic y simbolo");
+   AssertEqualDouble(basket.volume, 0.03, 1e-9, "scan suma solo el volumen propio");
+   AssertEqualDouble(basket.averagePrice, 1.1006666667, 1e-9,
+                     "scan ignora el promedio de posiciones ajenas");
+   AssertEqualDouble(basket.lastOpenPrice, 1.1010, 1e-12,
+                     "scan devuelve el precio de la ultima orden");
+   AssertEqualInt((int)basket.direction, (int)BASKET_DIRECTION_BUY,
+                  "scan devuelve la direccion de la canasta");
+  }
+
+//+------------------------------------------------------------------+
+//| 3.2 Promedio ponderado y PnL con profit + swap + commission.     |
+//+------------------------------------------------------------------+
+void TestBasketAverageAndPnl()
+  {
+   BasketPosition positions[2];
+   positions[0] = MakeBasketPosition(1, 111, "TEST", POSITION_TYPE_BUY, 0.01, 1.0000,
+                                     D'2026.01.02 10:00:00', 1.5, 0.1, -0.3);
+   positions[1] = MakeBasketPosition(2, 111, "TEST", POSITION_TYPE_BUY, 0.02, 1.0010,
+                                     D'2026.01.02 10:05:00', -0.5, -0.2, -0.4);
+
+   BasketState basket;
+   LmAggregateBasket("TEST", 111, positions, basket);
+
+   AssertEqualDouble(basket.averagePrice, 1.0006666667, 1e-9,
+                     "promedio ponderado 0.01@1.0000 + 0.02@1.0010");
+   AssertEqualDouble(NormalizeDouble(basket.averagePrice, 4), 1.0007, 1e-9,
+                     "promedio ponderado redondeado a 4 digitos = 1.0007");
+   AssertEqualDouble(basket.pnl, 0.2, 1e-9,
+                     "PnL de canasta incluye profit + swap + commission");
+  }
+
+//+------------------------------------------------------------------+
+//| 3.3 Ciclo de vida y reinicio del contador de pasos.              |
+//+------------------------------------------------------------------+
+void TestBasketLifecycle()
+  {
+   BasketPosition one[1];
+   one[0] = MakeBasketPosition(1, 111, "TEST", POSITION_TYPE_BUY, 0.01, 1.1000,
+                               D'2026.01.02 10:00:00');
+
+   BasketPosition many[3];
+   many[0] = one[0];
+   many[1] = MakeBasketPosition(2, 111, "TEST", POSITION_TYPE_BUY, 0.02, 1.0990,
+                                D'2026.01.02 10:05:00');
+   many[2] = MakeBasketPosition(3, 111, "TEST", POSITION_TYPE_BUY, 0.03, 1.0980,
+                                D'2026.01.02 10:10:00');
+
+   BasketState emptyBasket;
+   BasketPosition none[];
+   LmAggregateBasket("TEST", 111, none, emptyBasket);
+
+   BasketState basket;
+   CBasketTracker tracker;
+
+   AssertEqualInt((int)tracker.State(), (int)BASKET_LIFECYCLE_FLAT,
+                  "la canasta inicia plana");
+   AssertEqualInt(tracker.StepCount(), 0, "la canasta plana no tiene pasos");
+
+   LmAggregateBasket("TEST", 111, one, basket);
+   tracker.Update(basket);
+   AssertEqualInt((int)tracker.State(), (int)BASKET_LIFECYCLE_OPEN,
+                  "con una posicion la canasta queda abierta");
+   AssertEqualInt(tracker.StepCount(), 0, "el primer lote no cuenta como paso");
+   AssertTrue(!tracker.AllowsDirection(BASKET_DIRECTION_SELL),
+              "canasta abierta no permite la direccion opuesta");
+
+   LmAggregateBasket("TEST", 111, many, basket);
+   tracker.Update(basket);
+   AssertEqualInt(tracker.StepCount(), 2, "tres posiciones equivalen a dos pasos");
+   AssertTrue(tracker.IsOpen(), "la canasta sigue abierta");
+
+   tracker.Update(emptyBasket);
+   AssertEqualInt((int)tracker.State(), (int)BASKET_LIFECYCLE_CLOSED,
+                  "al cerrarse la canasta pasa a CLOSED");
+   AssertEqualInt(tracker.StepCount(), 0,
+                  "al cerrar toda la canasta el contador vuelve a cero");
+
+   tracker.Update(emptyBasket);
+   AssertEqualInt((int)tracker.State(), (int)BASKET_LIFECYCLE_FLAT,
+                  "tras el tick de cierre la canasta queda plana");
+   AssertTrue(tracker.CanOpenFirst(), "una canasta plana permite la primera orden");
+  }
+
+//+------------------------------------------------------------------+
+//| 3.4 Deteccion del paso de grid por distancia en pips.            |
+//+------------------------------------------------------------------+
+void TestBasketGridStep()
+  {
+   double pipSize = 0.0001;
+
+   BasketPosition buyPositions[1];
+   buyPositions[0] = MakeBasketPosition(1, 111, "TEST", POSITION_TYPE_BUY, 0.01, 1.1000,
+                                        D'2026.01.02 10:00:00');
+   BasketState buyBasket;
+   LmAggregateBasket("TEST", 111, buyPositions, buyBasket);
+
+   AssertEqualDouble(LmGridDistancePips(buyBasket, 1.0978, pipSize), 22.0, 1e-9,
+                     "compra que cae 22 pips");
+   AssertTrue(LmGridStepReached(buyBasket, 1.0978, 22.0, pipSize),
+              "compra que cae alcanza el paso de grid");
+   AssertTrue(!LmGridStepReached(buyBasket, 1.0980, 22.0, pipSize),
+              "compra que cae 20 pips no alcanza el paso");
+   AssertTrue(!LmGridStepReached(buyBasket, 1.1020, 22.0, pipSize),
+              "compra que sube no habilita el paso");
+
+   BasketPosition sellPositions[1];
+   sellPositions[0] = MakeBasketPosition(2, 111, "TEST", POSITION_TYPE_SELL, 0.01, 1.1000,
+                                         D'2026.01.02 10:00:00');
+   BasketState sellBasket;
+   LmAggregateBasket("TEST", 111, sellPositions, sellBasket);
+
+   AssertTrue(LmGridStepReached(sellBasket, 1.1022, 22.0, pipSize),
+              "venta que sube alcanza el paso de grid");
+   AssertTrue(!LmGridStepReached(sellBasket, 1.1020, 22.0, pipSize),
+              "venta que sube 20 pips no alcanza el paso");
+   AssertTrue(!LmGridStepReached(sellBasket, 1.0980, 22.0, pipSize),
+              "venta que baja no habilita el paso");
   }
 
 //+------------------------------------------------------------------+
@@ -216,6 +380,10 @@ void RunTests()
    TestMarketSnapshot();
    TestMarketFlags();
    TestMarketHandles();
+   TestBasketScanFiltering();
+   TestBasketAverageAndPnl();
+   TestBasketLifecycle();
+   TestBasketGridStep();
 
    if(InjectFailure)
       AssertTrue(false, "fallo inyectado a proposito");

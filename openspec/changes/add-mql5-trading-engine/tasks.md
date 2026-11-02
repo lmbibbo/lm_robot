@@ -18,10 +18,10 @@
 
 ## 3. Basket state
 
-- [ ] 3.1 Implementar `Scan(magic)` que filtre símbolo y magic y devuelva cantidad, dirección, volumen, promedio y precio de la última orden; verificar que ignora posiciones de otro magic
-- [ ] 3.2 Calcular promedio ponderado y PnL con `profit + swap + commission`; verificar con 0.01 lotes a 1.0000 y 0.02 a 1.0010 (promedio esperado 1.0007)
-- [ ] 3.3 Implementar el ciclo de vida plano / abierto / cerrado y el reinicio del contador de pasos; verificar que al cerrar toda la canasta el contador vuelve a cero
-- [ ] 3.4 Implementar la detección de paso de grid por distancia en pips desde la última orden; verificar compra que cae, venta que sube y el caso que no alcanza la distancia
+- [x] 3.1 Implementar `Scan(magic)` que filtre símbolo y magic y devuelva cantidad, dirección, volumen, promedio y precio de la última orden; verificar que ignora posiciones de otro magic
+- [x] 3.2 Calcular promedio ponderado y PnL con `profit + swap + commission`; verificar con 0.01 lotes a 1.0000 y 0.02 a 1.0010 (promedio esperado 1.0007)
+- [x] 3.3 Implementar el ciclo de vida plano / abierto / cerrado y el reinicio del contador de pasos; verificar que al cerrar toda la canasta el contador vuelve a cero
+- [x] 3.4 Implementar la detección de paso de grid por distancia en pips desde la última orden; verificar compra que cae, venta que sube y el caso que no alcanza la distancia
 
 ## 4. Executor
 
