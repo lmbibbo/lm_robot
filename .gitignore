@@ -1,5 +1,19 @@
+# Compilados de MQL5
 *.ex5
 *.ex4
+*.mqproj
+
+# Logs de compilacion y de ejecucion
+*.log
+
+# Artefactos de backtest y del strategy tester
+*.set
+*.tpl
+*.htm
+*.xlsx
+Tester/
+Reports/
+
 settings.json
 c_cpp_properties.json
 .vscode/
