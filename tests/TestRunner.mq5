@@ -11,6 +11,9 @@
 #include "../Include/LmRobot/Execution/Executor.mqh"
 #include "../Include/LmRobot/Risk/RiskPolicy.mqh"
 #include "../Include/LmRobot/Risk/DailyLossGuard.mqh"
+#include "../Include/LmRobot/Strategies/Signal.mqh"
+#include "../Include/LmRobot/Strategies/Scalper.mqh"
+#include "../Include/LmRobot/Harness/SignalCsv.mqh"
 
 //--- Fuerza un fallo para verificar que el runner realmente falla.
 input bool InjectFailure = false;
@@ -825,6 +828,130 @@ void TestRiskManagementPriority()
   }
 
 //+------------------------------------------------------------------+
+//| 6.4 Senal pura de Scalper Pro y determinismo.                    |
+//+------------------------------------------------------------------+
+void TestScalperSignal()
+  {
+   AssertEqualInt((int)LmScalperSignal(1.1000, 1.0990), (int)SIGNAL_SELL,
+                  "close[2] > close[1] devuelve SELL");
+   AssertEqualInt((int)LmScalperSignal(1.0990, 1.1000), (int)SIGNAL_BUY,
+                  "close[2] < close[1] devuelve BUY");
+   AssertEqualInt((int)LmScalperSignal(1.1000, 1.1000), (int)SIGNAL_BUY,
+                  "close[2] == close[1] devuelve BUY");
+
+   ENUM_SIGNAL_DIRECTION first  = LmScalperSignal(1.1000, 1.0990);
+   ENUM_SIGNAL_DIRECTION second = LmScalperSignal(1.1000, 1.0990);
+   AssertEqualInt((int)second, (int)first,
+                  "dos evaluaciones con las mismas entradas son deterministas");
+
+   AssertTrue(LmSignalDirectionName(SIGNAL_SELL) == "SELL",
+              "el nombre de SELL es estable para el CSV");
+   AssertEqualInt((int)LmSignalDirectionFromName("NONE"), (int)SIGNAL_NONE,
+                  "NONE se puede leer del CSV");
+   AssertTrue(LmTimeframeName(PERIOD_H1) == "H1",
+              "el timeframe H1 se escribe sin el prefijo PERIOD_");
+  }
+
+//+------------------------------------------------------------------+
+//| 6.2 Exportacion CSV con fecha, estrategia, direccion y timeframe.|
+//+------------------------------------------------------------------+
+void TestSignalCsvExport()
+  {
+   string filename = "lm_robot_test_signal_export.csv";
+   FileDelete(filename);
+
+   datetime times[3];
+   times[0] = D'2026.01.02 10:00:00';
+   times[1] = D'2026.01.02 11:00:00';
+   times[2] = D'2026.01.02 12:00:00';
+
+   ENUM_SIGNAL_DIRECTION directions[3];
+   directions[0] = SIGNAL_BUY;
+   directions[1] = SIGNAL_SELL;
+   directions[2] = SIGNAL_NONE;
+
+   int written = 0;
+   AssertTrue(LmExportSignalSeries(times, directions, 0, 3, "Scalper", "H1",
+                                   filename, written),
+              "la exportacion CSV escribe la serie de senales");
+   AssertEqualInt(written, 3, "se escriben las tres filas solicitadas");
+
+   CSignalCsvReader reader;
+   AssertTrue(reader.Load(filename), "el CSV exportado se puede leer");
+   AssertEqualInt(reader.Count(), 3, "el CSV contiene una fila por senal");
+
+   SignalRow row;
+   AssertTrue(reader.RowAt(2, row), "la tercera fila esta disponible");
+   AssertEqualInt((int)row.direction, (int)SIGNAL_NONE,
+                  "la exportacion conserva las senales NONE");
+   AssertTrue(row.strategy == "Scalper", "la fila conserva la estrategia");
+   AssertTrue(row.timeframe == "H1", "la fila conserva el timeframe");
+   AssertTrue(row.time == times[2], "la fila conserva la fecha del servidor");
+
+   FileDelete(filename);
+  }
+
+//+------------------------------------------------------------------+
+//| 6.3 Comparador CSV: coincidencias, faltantes, sobrantes.         |
+//+------------------------------------------------------------------+
+void TestSignalCsvComparator()
+  {
+   string referenceFile = "lm_robot_test_signal_ref.csv";
+   string sameFile      = "lm_robot_test_signal_same.csv";
+   string diffFile      = "lm_robot_test_signal_diff.csv";
+
+   FileDelete(referenceFile);
+   FileDelete(sameFile);
+   FileDelete(diffFile);
+
+   CSignalCsvWriter reference;
+   AssertTrue(reference.Open(referenceFile), "se crea el CSV de referencia");
+   reference.WriteRow(D'2026.01.02 10:00:00', "Scalper", SIGNAL_SELL, "H1");
+   reference.WriteRow(D'2026.01.02 11:00:00', "Scalper", SIGNAL_BUY,  "H1");
+   reference.WriteRow(D'2026.01.02 12:00:00', "Scalper", SIGNAL_NONE, "H1");
+   reference.Close();
+
+   CSignalCsvWriter same;
+   AssertTrue(same.Open(sameFile), "se crea el CSV identico");
+   same.WriteRow(D'2026.01.02 10:00:00', "Scalper", SIGNAL_SELL, "H1");
+   same.WriteRow(D'2026.01.02 11:00:00', "Scalper", SIGNAL_BUY,  "H1");
+   same.WriteRow(D'2026.01.02 12:00:00', "Scalper", SIGNAL_NONE, "H1");
+   same.Close();
+
+   CSignalCsvWriter diff;
+   AssertTrue(diff.Open(diffFile), "se crea el CSV alterado");
+   diff.WriteRow(D'2026.01.02 10:00:00', "Scalper", SIGNAL_SELL, "H1");
+   diff.WriteRow(D'2026.01.02 11:00:00', "Scalper", SIGNAL_NONE, "H1");
+   diff.WriteRow(D'2026.01.02 13:00:00', "Scalper", SIGNAL_BUY,  "H1");
+   diff.Close();
+
+   CSignalComparison comparison;
+   AssertTrue(LmCompareSignalCsvFiles(referenceFile, sameFile, comparison),
+              "el comparador lee dos CSV identicos");
+   AssertEqualInt(comparison.referenceCount, 3, "la referencia tiene tres filas");
+   AssertEqualInt(comparison.actualCount, 3, "el CSV nuevo tiene tres filas");
+   AssertEqualInt(comparison.matches, 3, "las tres filas coinciden");
+   AssertEqualInt(comparison.missing, 0, "no hay filas faltantes");
+   AssertEqualInt(comparison.extra, 0, "no hay filas sobrantes");
+   AssertEqualInt(comparison.mismatched, 0, "no hay direcciones diferentes");
+   AssertTrue(comparison.parity, "dos CSV identicos declaran paridad");
+
+   AssertTrue(LmCompareSignalCsvFiles(referenceFile, diffFile, comparison),
+              "el comparador lee el CSV alterado");
+   AssertEqualInt(comparison.matches, 1, "solo la primera fila coincide");
+   AssertEqualInt(comparison.mismatched, 1, "se detecta una direccion diferente");
+   AssertEqualInt(comparison.missing, 1, "se detecta una fila faltante");
+   AssertEqualInt(comparison.extra, 1, "se detecta una fila sobrante");
+   AssertTrue(!comparison.parity, "el CSV alterado no declara paridad");
+   AssertTrue(ArraySize(comparison.details) >= 3,
+              "el reporte detalla cada diferencia");
+
+   FileDelete(referenceFile);
+   FileDelete(sameFile);
+   FileDelete(diffFile);
+  }
+
+//+------------------------------------------------------------------+
 //| 2.1 Deteccion de pip.                                            |
 //+------------------------------------------------------------------+
 void TestPipDetection()
@@ -973,6 +1100,9 @@ void RunTests()
    TestRiskVolumeAndStepCaps();
    TestDailyLossGuard();
    TestRiskManagementPriority();
+   TestScalperSignal();
+   TestSignalCsvExport();
+   TestSignalCsvComparator();
 
    if(InjectFailure)
       AssertTrue(false, "fallo inyectado a proposito");

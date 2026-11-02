@@ -22,8 +22,10 @@ Include/LmRobot/         Módulos del motor, incluidos con #include
   Risk/                  Cálculo de lote, límites y guardas
   Execution/             Envío y gestión de órdenes
   Strategies/            Estrategias de entrada y salida
+  Harness/               Exportación y comparación CSV de señales
   UI/                    Panel de estado en el gráfico
-tests/                   Harness de pruebas (TestRunner.mq5)
+tests/                   Harness de pruebas y EAs de paridad
+  reference/             CSV de referencia versionado
 tools/build.ps1          Compilador con código de salida confiable
 docs/                    Documentación del proyecto
 openspec/                Planificación del cambio (propuesta, diseño, specs, tareas)

@@ -42,12 +42,12 @@
 
 ## 6. Paridad de señales (Scalper)
 
-- [ ] 6.1 Crear el port "solo señales" de referencia y generar el CSV de referencia para AUDCAD en el período elegido; verificar que hay una fila por barra evaluada
-- [ ] 6.2 Implementar la exportación CSV del motor nuevo con fecha, estrategia, dirección y timeframe; verificar que incluye las señales `NONE`
-- [ ] 6.3 Implementar el comparador de CSV que reporte coincidencias, faltantes y sobrantes; verificar con dos archivos idénticos (cero diferencias) y con uno alterado
-- [ ] 6.4 Implementar la señal Scalper Pro (`close[2] > close[1]`) como función pura; verificar los dos casos y el determinismo en dos evaluaciones
-- [ ] 6.5 Ejecutar la comparación de Scalper contra la referencia y documentar las diferencias esperadas por el gate de barra; verificar que el reporte existe y explica cada diferencia
-- [ ] 6.6 Documentar el procedimiento de paridad en `docs/paridad.md`; verificar que otra persona puede reproducir el CSV de referencia siguiendo el documento
+- [x] 6.1 Crear el port "solo señales" de referencia y generar el CSV de referencia para AUDCAD en el período elegido; verificar que hay una fila por barra evaluada
+- [x] 6.2 Implementar la exportación CSV del motor nuevo con fecha, estrategia, dirección y timeframe; verificar que incluye las señales `NONE`
+- [x] 6.3 Implementar el comparador de CSV que reporte coincidencias, faltantes y sobrantes; verificar con dos archivos idénticos (cero diferencias) y con uno alterado
+- [x] 6.4 Implementar la señal Scalper Pro (`close[2] > close[1]`) como función pura; verificar los dos casos y el determinismo en dos evaluaciones
+- [x] 6.5 Ejecutar la comparación de Scalper contra la referencia y documentar las diferencias esperadas por el gate de barra; verificar que el reporte existe y explica cada diferencia
+- [x] 6.6 Documentar el procedimiento de paridad en `docs/paridad.md`; verificar que otra persona puede reproducir el CSV de referencia siguiendo el documento
 
 ## 7. Integración del runtime
 
