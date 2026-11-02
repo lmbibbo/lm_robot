@@ -259,6 +259,46 @@ double LmPositionCommission(const ulong positionId)
   }
 
 //+------------------------------------------------------------------+
+//| Recolecta las posiciones reales del simbolo y magic indicados.   |
+//+------------------------------------------------------------------+
+int LmCollectBasketPositions(const string symbol, const long magic,
+                             BasketPosition &positions[])
+  {
+   ArrayResize(positions, 0);
+
+   int total = PositionsTotal();
+   int used  = 0;
+
+   for(int i = 0; i < total; i++)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(PositionGetString(POSITION_SYMBOL) != symbol)
+         continue;
+
+      if(PositionGetInteger(POSITION_MAGIC) != magic)
+         continue;
+
+      ArrayResize(positions, used + 1);
+      positions[used].ticket     = ticket;
+      positions[used].magic      = magic;
+      positions[used].symbol     = symbol;
+      positions[used].type       = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      positions[used].volume     = PositionGetDouble(POSITION_VOLUME);
+      positions[used].openPrice  = PositionGetDouble(POSITION_PRICE_OPEN);
+      positions[used].openTime   = (datetime)PositionGetInteger(POSITION_TIME);
+      positions[used].profit     = PositionGetDouble(POSITION_PROFIT);
+      positions[used].swap       = PositionGetDouble(POSITION_SWAP);
+      positions[used].commission = LmPositionCommission((ulong)PositionGetInteger(POSITION_IDENTIFIER));
+      used++;
+     }
+
+   return(used);
+  }
+
+//+------------------------------------------------------------------+
 //| Scan de las posiciones reales del simbolo y magic indicados.     |
 //+------------------------------------------------------------------+
 class CBasketScanner
@@ -277,35 +317,7 @@ public:
    bool Scan(const long magic, BasketState &basket)
      {
       BasketPosition positions[];
-      int total = PositionsTotal();
-      int used  = 0;
-
-      for(int i = 0; i < total; i++)
-        {
-         ulong ticket = PositionGetTicket(i);
-         if(ticket == 0)
-            continue;
-
-         if(PositionGetString(POSITION_SYMBOL) != m_symbol)
-            continue;
-
-         if(PositionGetInteger(POSITION_MAGIC) != magic)
-            continue;
-
-         ArrayResize(positions, used + 1);
-         positions[used].ticket     = ticket;
-         positions[used].magic      = magic;
-         positions[used].symbol     = m_symbol;
-         positions[used].type       = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-         positions[used].volume     = PositionGetDouble(POSITION_VOLUME);
-         positions[used].openPrice  = PositionGetDouble(POSITION_PRICE_OPEN);
-         positions[used].openTime   = (datetime)PositionGetInteger(POSITION_TIME);
-         positions[used].profit     = PositionGetDouble(POSITION_PROFIT);
-         positions[used].swap       = PositionGetDouble(POSITION_SWAP);
-         positions[used].commission = LmPositionCommission((ulong)PositionGetInteger(POSITION_IDENTIFIER));
-         used++;
-        }
-
+      LmCollectBasketPositions(m_symbol, magic, positions);
       return(LmAggregateBasket(m_symbol, magic, positions, basket));
      }
   };

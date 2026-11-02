@@ -25,11 +25,11 @@
 
 ## 4. Executor
 
-- [ ] 4.1 Implementar envío con normalización de volumen al step, mínimo y máximo del símbolo; verificar que un volumen no múltiplo se ajusta al válido más cercano
-- [ ] 4.2 Rechazar órdenes sin stop loss válido o con stop dentro del stops level; verificar que no se envía y que se registra el motivo
-- [ ] 4.3 Implementar reintentos acotados por cantidad y por deadline, sin bucles infinitos; verificar con un ejecutor simulado que rechaza siempre y confirmar que retorna al agotar el límite
-- [ ] 4.4 Implementar la modificación de SL y TP de toda la canasta; verificar que todas las posiciones quedan con el mismo SL y el mismo TP
-- [ ] 4.5 Verificar margen disponible antes de enviar; verificar que una orden sin margen se rechaza y la canasta no se altera
+- [x] 4.1 Implementar envío con normalización de volumen al step, mínimo y máximo del símbolo; verificar que un volumen no múltiplo se ajusta al válido más cercano
+- [x] 4.2 Rechazar órdenes sin stop loss válido o con stop dentro del stops level; verificar que no se envía y que se registra el motivo
+- [x] 4.3 Implementar reintentos acotados por cantidad y por deadline, sin bucles infinitos; verificar con un ejecutor simulado que rechaza siempre y confirmar que retorna al agotar el límite
+- [x] 4.4 Implementar la modificación de SL y TP de toda la canasta; verificar que todas las posiciones quedan con el mismo SL y el mismo TP
+- [x] 4.5 Verificar margen disponible antes de enviar; verificar que una orden sin margen se rechaza y la canasta no se altera
 
 ## 5. Risk policy
 

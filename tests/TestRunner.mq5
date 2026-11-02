@@ -8,6 +8,7 @@
 
 #include "../Include/LmRobot/Core/MarketContext.mqh"
 #include "../Include/LmRobot/Core/BasketState.mqh"
+#include "../Include/LmRobot/Execution/Executor.mqh"
 
 //--- Fuerza un fallo para verificar que el runner realmente falla.
 input bool InjectFailure = false;
@@ -246,6 +247,310 @@ void TestBasketGridStep()
   }
 
 //+------------------------------------------------------------------+
+//| Doble de prueba para el backend de ejecucion.                    |
+//+------------------------------------------------------------------+
+class CTestExecutionBackend : public IExecutionBackend
+  {
+private:
+   bool    m_acceptSend;
+   bool    m_acceptModify;
+   int     m_sendCalls;
+   int     m_modifyCalls;
+   double  m_lastVolume;
+   ulong   m_tickets[];
+   double  m_sl[];
+   double  m_tp[];
+
+public:
+   CTestExecutionBackend(const bool acceptSend = true, const bool acceptModify = true)
+     {
+      m_acceptSend   = acceptSend;
+      m_acceptModify = acceptModify;
+      m_sendCalls    = 0;
+      m_modifyCalls  = 0;
+      m_lastVolume   = 0.0;
+     }
+
+   virtual bool Send(const OrderRequest &request, int &retcode)
+     {
+      m_sendCalls++;
+      m_lastVolume = request.volume;
+      retcode = (m_acceptSend ? 10009 : 10004);
+      return(m_acceptSend);
+     }
+
+   virtual bool Modify(const ulong ticket, const double sl, const double tp, int &retcode)
+     {
+      int index = ArraySize(m_tickets);
+      ArrayResize(m_tickets, index + 1);
+      ArrayResize(m_sl, index + 1);
+      ArrayResize(m_tp, index + 1);
+
+      m_tickets[index] = ticket;
+      m_sl[index]      = sl;
+      m_tp[index]      = tp;
+
+      m_modifyCalls++;
+      retcode = (m_acceptModify ? 10009 : 10004);
+      return(m_acceptModify);
+     }
+
+   int    SendCalls()    { return(m_sendCalls); }
+   int    ModifyCalls()  { return(m_modifyCalls); }
+   double LastVolume()   { return(m_lastVolume); }
+   ulong  TicketAt(const int index) { return(m_tickets[index]); }
+   double SlAt(const int index)     { return(m_sl[index]); }
+   double TpAt(const int index)     { return(m_tp[index]); }
+  };
+
+//+------------------------------------------------------------------+
+//| Doble de prueba para el proveedor de margen.                     |
+//+------------------------------------------------------------------+
+class CTestAccountProvider : public IAccountInfoProvider
+  {
+private:
+   double m_freeMargin;
+   double m_requiredMargin;
+
+public:
+   CTestAccountProvider(const double freeMargin, const double requiredMargin)
+     {
+      m_freeMargin     = freeMargin;
+      m_requiredMargin = requiredMargin;
+     }
+
+   virtual double FreeMargin()
+     {
+      return(m_freeMargin);
+     }
+
+   virtual bool CalcMargin(const ENUM_ORDER_TYPE type, const string symbol,
+                           const double volume, const double price, double &margin)
+     {
+      margin = m_requiredMargin;
+      return(true);
+     }
+  };
+
+SymbolLimits MakeExecutionLimits()
+  {
+   SymbolLimits limits;
+
+   limits.symbol            = "TEST";
+   limits.point             = 0.0001;
+   limits.volumeStep        = 0.01;
+   limits.volumeMin         = 0.01;
+   limits.volumeMax         = 1.0;
+   limits.stopsLevelPoints  = 10.0;
+   limits.freezeLevelPoints = 0.0;
+   limits.valid             = true;
+
+   return(limits);
+  }
+
+ExecutorConfig MakeExecutionConfig(const int maxAttempts = 3,
+                                   const int retryDelayMs = 0,
+                                   const int deadlineMs = 1000)
+  {
+   ExecutorConfig config;
+
+   config.maxAttempts  = maxAttempts;
+   config.retryDelayMs = retryDelayMs;
+   config.deadlineMs   = deadlineMs;
+   config.magic        = 111;
+
+   return(config);
+  }
+
+OrderRequest MakeOrderRequest(const ENUM_ORDER_TYPE type, const double volume,
+                              const double price, const double sl, const double tp = 0.0)
+  {
+   OrderRequest request;
+
+   request.symbol  = "TEST";
+   request.type    = type;
+   request.volume  = volume;
+   request.price   = price;
+   request.sl      = sl;
+   request.tp      = tp;
+   request.comment = "test";
+
+   return(request);
+  }
+
+//+------------------------------------------------------------------+
+//| 4.1 Normalizacion del volumen al step, minimo y maximo.          |
+//+------------------------------------------------------------------+
+void TestExecutorVolumeNormalization()
+  {
+   AssertEqualDouble(LmNormalizeVolume(0.017, 0.01, 0.01, 1.0), 0.02, 1e-9,
+                     "volumen 0.017 se ajusta al multiplo mas cercano 0.02");
+   AssertEqualDouble(LmNormalizeVolume(0.013, 0.01, 0.01, 1.0), 0.01, 1e-9,
+                     "volumen 0.013 se ajusta al multiplo mas cercano 0.01");
+   AssertEqualDouble(LmNormalizeVolume(0.001, 0.01, 0.01, 1.0), 0.01, 1e-9,
+                     "volumen debajo del minimo se acota al minimo");
+   AssertEqualDouble(LmNormalizeVolume(2.0, 0.01, 0.01, 1.0), 1.0, 1e-9,
+                     "volumen encima del maximo se acota al maximo");
+   AssertEqualDouble(LmNormalizeVolume(0.26, 0.1, 0.1, 0.25), 0.2, 1e-9,
+                     "el maximo se ajusta al multiplo valido inferior");
+   AssertEqualDouble(LmNormalizeVolume(0.02, 0.0, 0.01, 1.0), 0.0, 1e-9,
+                     "step invalido devuelve cero");
+
+   SymbolLimits limits = MakeExecutionLimits();
+   CTestExecutionBackend backend;
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   AssertTrue(executor.Init(&backend, &accounts, limits, MakeExecutionConfig()),
+              "executor inicializado para normalizacion");
+
+   OrderRequest request = MakeOrderRequest(ORDER_TYPE_BUY, 0.017, 1.1000, 1.0990);
+   ExecutionReport report;
+   AssertEqualInt((int)executor.Send(request, report), (int)EXECUTION_STATUS_OK,
+                  "orden con volumen no multiple se envia normalizada");
+   AssertEqualDouble(report.normalizedVolume, 0.02, 1e-9,
+                     "el reporte expone el volumen normalizado");
+   AssertEqualDouble(backend.LastVolume(), 0.02, 1e-9,
+                     "el backend recibe el volumen normalizado");
+  }
+
+//+------------------------------------------------------------------+
+//| 4.2 Rechazo de ordenes sin SL o con SL dentro del stops level.   |
+//+------------------------------------------------------------------+
+void TestExecutorStopLossValidation()
+  {
+   string reason = "";
+
+   AssertTrue(LmValidateStopLoss(ORDER_TYPE_BUY, 1.1000, 1.0990, 10.0, 0.0001, reason),
+              "SL de compra a 10 puntos es valido");
+   AssertTrue(!LmValidateStopLoss(ORDER_TYPE_BUY, 1.1000, 0.0, 10.0, 0.0001, reason),
+              "compra sin SL se rechaza");
+   AssertTrue(reason != "", "el rechazo sin SL registra el motivo");
+   AssertTrue(!LmValidateStopLoss(ORDER_TYPE_BUY, 1.1000, 1.0995, 10.0, 0.0001, reason),
+              "SL de compra dentro del stops level se rechaza");
+   AssertTrue(reason != "", "el rechazo por stops level registra el motivo");
+   AssertTrue(LmValidateStopLoss(ORDER_TYPE_SELL, 1.1000, 1.1010, 10.0, 0.0001, reason),
+              "SL de venta a 10 puntos es valido");
+   AssertTrue(!LmValidateStopLoss(ORDER_TYPE_SELL, 1.1000, 1.1005, 10.0, 0.0001, reason),
+              "SL de venta dentro del stops level se rechaza");
+
+   SymbolLimits limits = MakeExecutionLimits();
+   CTestExecutionBackend backend;
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   executor.Init(&backend, &accounts, limits, MakeExecutionConfig());
+
+   OrderRequest noStop = MakeOrderRequest(ORDER_TYPE_BUY, 0.01, 1.1000, 0.0);
+   ExecutionReport report;
+   AssertEqualInt((int)executor.Send(noStop, report), (int)EXECUTION_STATUS_INVALID_STOP,
+                  "el executor rechaza la orden sin stop loss");
+   AssertEqualInt(backend.SendCalls(), 0, "la orden sin stop loss no se envia");
+   AssertTrue(report.reason != "", "el executor registra el motivo del rechazo");
+
+   OrderRequest tightStop = MakeOrderRequest(ORDER_TYPE_BUY, 0.01, 1.1000, 1.0995);
+   AssertEqualInt((int)executor.Send(tightStop, report), (int)EXECUTION_STATUS_INVALID_STOP,
+                  "el executor rechaza el stop dentro del stops level");
+   AssertEqualInt(backend.SendCalls(), 0, "la orden con stop invalido no se envia");
+  }
+
+//+------------------------------------------------------------------+
+//| 4.3 Reintentos acotados por cantidad y por deadline.             |
+//+------------------------------------------------------------------+
+void TestExecutorRetryLimits()
+  {
+   SymbolLimits limits = MakeExecutionLimits();
+   CTestAccountProvider accounts(1000.0, 10.0);
+   OrderRequest request = MakeOrderRequest(ORDER_TYPE_BUY, 0.01, 1.1000, 1.0990);
+   ExecutionReport report;
+
+   CTestExecutionBackend alwaysRejects(false, true);
+   CExecutor executor;
+   executor.Init(&alwaysRejects, &accounts, limits, MakeExecutionConfig(3, 0, 1000));
+   AssertEqualInt((int)executor.Send(request, report), (int)EXECUTION_STATUS_RETRY_EXHAUSTED,
+                  "un backend que rechaza siempre agota los reintentos");
+   AssertEqualInt(report.attempts, 3, "el executor respeta el maximo de intentos");
+   AssertEqualInt(alwaysRejects.SendCalls(), 3, "el backend recibe exactamente tres intentos");
+
+   CTestExecutionBackend deadlineRejects(false, true);
+   CExecutor deadlineExecutor;
+   deadlineExecutor.Init(&deadlineRejects, &accounts, limits, MakeExecutionConfig(100, 10, 1));
+   AssertEqualInt((int)deadlineExecutor.Send(request, report),
+                  (int)EXECUTION_STATUS_RETRY_EXHAUSTED,
+                  "un deadline vencido corta los reintentos");
+   AssertTrue(report.attempts < 100, "el deadline limita los intentos antes del maximo");
+   AssertTrue(deadlineRejects.SendCalls() < 100, "el backend no recibe los cien intentos");
+  }
+
+//+------------------------------------------------------------------+
+//| 4.4 Modificacion de SL y TP de toda la canasta.                  |
+//+------------------------------------------------------------------+
+void TestExecutorBasketProtection()
+  {
+   BasketPosition positions[3];
+   positions[0] = MakeBasketPosition(1, 111, "TEST", POSITION_TYPE_BUY, 0.01, 1.1000,
+                                     D'2026.01.02 10:00:00');
+   positions[1] = MakeBasketPosition(2, 111, "TEST", POSITION_TYPE_BUY, 0.02, 1.0990,
+                                     D'2026.01.02 10:05:00');
+   positions[2] = MakeBasketPosition(3, 111, "TEST", POSITION_TYPE_BUY, 0.03, 1.0980,
+                                     D'2026.01.02 10:10:00');
+
+   SymbolLimits limits = MakeExecutionLimits();
+   CTestExecutionBackend backend(true, true);
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   executor.Init(&backend, &accounts, limits, MakeExecutionConfig());
+
+   ExecutionReport report;
+   AssertEqualInt((int)executor.ModifyBasket(positions, 1.0900, 1.1100, report),
+                  (int)EXECUTION_STATUS_OK,
+                  "la proteccion de la canasta se aplica a todas las posiciones");
+   AssertEqualInt(report.modifiedCount, 3, "se modifican las tres posiciones");
+   AssertEqualInt(backend.ModifyCalls(), 3, "el backend recibe una modificacion por posicion");
+
+   for(int i = 0; i < 3; i++)
+     {
+      AssertEqualInt((int)backend.TicketAt(i), i + 1,
+                     StringFormat("posicion %d modificada por ticket", i + 1));
+      AssertEqualDouble(backend.SlAt(i), 1.0900, 1e-12,
+                        StringFormat("posicion %d comparte el SL", i + 1));
+      AssertEqualDouble(backend.TpAt(i), 1.1100, 1e-12,
+                        StringFormat("posicion %d comparte el TP", i + 1));
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| 4.5 Verificacion de margen libre antes de enviar.                |
+//+------------------------------------------------------------------+
+void TestExecutorMarginCheck()
+  {
+   AssertTrue(LmHasEnoughMargin(10.0, 10.0), "margen libre igual al requerido alcanza");
+   AssertTrue(LmHasEnoughMargin(5.0, 10.0), "margen libre mayor al requerido alcanza");
+   AssertTrue(!LmHasEnoughMargin(10.0, 5.0), "margen libre insuficiente se detecta");
+
+   SymbolLimits limits = MakeExecutionLimits();
+   OrderRequest request = MakeOrderRequest(ORDER_TYPE_BUY, 0.01, 1.1000, 1.0990);
+   ExecutionReport report;
+
+   CTestExecutionBackend noMarginBackend;
+   CTestAccountProvider noMargin(5.0, 10.0);
+   CExecutor noMarginExecutor;
+   noMarginExecutor.Init(&noMarginBackend, &noMargin, limits, MakeExecutionConfig());
+   AssertEqualInt((int)noMarginExecutor.Send(request, report),
+                  (int)EXECUTION_STATUS_NO_MARGIN,
+                  "la orden sin margen se rechaza");
+   AssertEqualInt(noMarginBackend.SendCalls(), 0,
+                  "la canasta no se altera cuando falta margen");
+   AssertTrue(report.reason != "", "el rechazo por margen registra el motivo");
+
+   CTestExecutionBackend fundedBackend;
+   CTestAccountProvider funded(1000.0, 10.0);
+   CExecutor fundedExecutor;
+   fundedExecutor.Init(&fundedBackend, &funded, limits, MakeExecutionConfig());
+   AssertEqualInt((int)fundedExecutor.Send(request, report), (int)EXECUTION_STATUS_OK,
+                  "la orden con margen suficiente se envia");
+   AssertEqualInt(fundedBackend.SendCalls(), 1, "el backend recibe la orden con margen");
+  }
+
+//+------------------------------------------------------------------+
 //| 2.1 Deteccion de pip.                                            |
 //+------------------------------------------------------------------+
 void TestPipDetection()
@@ -384,6 +689,11 @@ void RunTests()
    TestBasketAverageAndPnl();
    TestBasketLifecycle();
    TestBasketGridStep();
+   TestExecutorVolumeNormalization();
+   TestExecutorStopLossValidation();
+   TestExecutorRetryLimits();
+   TestExecutorBasketProtection();
+   TestExecutorMarginCheck();
 
    if(InjectFailure)
       AssertTrue(false, "fallo inyectado a proposito");
