@@ -275,6 +275,15 @@ public:
    //--- Refresco con valores inyectados (pruebas / simulacion).
    bool RefreshFromTick(const double bid, const double ask, const datetime time)
      {
+      double atrPips = 0.0;
+      bool hasAtr    = ReadAtr(atrPips);
+      return(RefreshFromValues(bid, ask, time, hasAtr, atrPips));
+     }
+
+   //--- Refresco con ATR inyectado (pruebas / simulacion).
+   bool RefreshFromValues(const double bid, const double ask, const datetime time,
+                          const bool hasAtr, const double atrPips)
+     {
       m_refreshes++;
       ResetSnapshot();
 
@@ -284,9 +293,6 @@ public:
       int stopsLevel  = 0;
       int freezeLevel = 0;
       ReadLevels(stopsLevel, freezeLevel);
-
-      double atrPips = 0.0;
-      bool hasAtr    = ReadAtr(atrPips);
 
       m_snapshot = LmBuildSnapshot(m_symbol, time, bid, ask,
                                    stopsLevel, freezeLevel, m_instrument,

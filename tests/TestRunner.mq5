@@ -8,11 +8,15 @@
 
 #include "../Include/LmRobot/Core/MarketContext.mqh"
 #include "../Include/LmRobot/Core/BasketState.mqh"
+#include "../Include/LmRobot/Core/Account.mqh"
+#include "../Include/LmRobot/Core/Runtime.mqh"
 #include "../Include/LmRobot/Execution/Executor.mqh"
 #include "../Include/LmRobot/Risk/RiskPolicy.mqh"
 #include "../Include/LmRobot/Risk/DailyLossGuard.mqh"
+#include "../Include/LmRobot/Risk/SessionGuard.mqh"
 #include "../Include/LmRobot/Strategies/Signal.mqh"
 #include "../Include/LmRobot/Strategies/Scalper.mqh"
+#include "../Include/LmRobot/Strategies/Strategy.mqh"
 #include "../Include/LmRobot/Harness/SignalCsv.mqh"
 
 //--- Fuerza un fallo para verificar que el runner realmente falla.
@@ -105,6 +109,8 @@ BasketPosition MakeBasketPosition(const ulong ticket, const long magic, const st
    position.type       = type;
    position.volume     = volume;
    position.openPrice  = openPrice;
+   position.sl         = 0.0;
+   position.tp         = 0.0;
    position.openTime   = openTime;
    position.profit     = profit;
    position.swap       = swap;
@@ -381,6 +387,323 @@ OrderRequest MakeOrderRequest(const ENUM_ORDER_TYPE type, const double volume,
    request.comment = "test";
 
    return(request);
+  }
+
+//+------------------------------------------------------------------+
+//| State compartido por el backend y la fuente de canasta.          |
+//+------------------------------------------------------------------+
+class CTestBrokerState
+  {
+public:
+   BasketPosition m_positions[];
+   ulong          m_nextTicket;
+   long           m_magic;
+   string         m_symbol;
+   double         m_bid;
+   double         m_ask;
+   int            m_sendCalls;
+   int            m_modifyCalls;
+   datetime       m_openTime;
+
+   CTestBrokerState()
+     {
+      m_nextTicket  = 1;
+      m_magic       = 111;
+      m_symbol      = "TEST5";
+      m_bid         = 0.0;
+      m_ask         = 0.0;
+      m_sendCalls   = 0;
+      m_modifyCalls = 0;
+      m_openTime    = D'2026.01.02 10:00:00';
+     }
+
+   int Count() { return(ArraySize(m_positions)); }
+   BasketPosition PositionAt(const int index) { return(m_positions[index]); }
+   int SendCalls()   { return(m_sendCalls); }
+   int ModifyCalls() { return(m_modifyCalls); }
+
+   void RemoveAt(const int index)
+     {
+      int total = ArraySize(m_positions);
+
+      for(int i = index; i < total - 1; i++)
+         m_positions[i] = m_positions[i + 1];
+
+      ArrayResize(m_positions, total - 1);
+     }
+
+   void CloseHits()
+     {
+      for(int i = ArraySize(m_positions) - 1; i >= 0; i--)
+        {
+         bool closed = false;
+
+         if(m_positions[i].type == POSITION_TYPE_BUY)
+           {
+            if(m_positions[i].sl > 0.0 && m_bid <= m_positions[i].sl)
+               closed = true;
+
+            if(m_positions[i].tp > 0.0 && m_bid >= m_positions[i].tp)
+               closed = true;
+           }
+         else
+           {
+            if(m_positions[i].sl > 0.0 && m_ask >= m_positions[i].sl)
+               closed = true;
+
+            if(m_positions[i].tp > 0.0 && m_ask <= m_positions[i].tp)
+               closed = true;
+           }
+
+         if(closed)
+            RemoveAt(i);
+        }
+     }
+
+   void SetQuote(const double bid, const double ask)
+     {
+      m_bid = bid;
+      m_ask = ask;
+      CloseHits();
+     }
+
+   void ClearProtection()
+     {
+      for(int i = 0; i < ArraySize(m_positions); i++)
+        {
+         m_positions[i].sl = 0.0;
+         m_positions[i].tp = 0.0;
+        }
+     }
+
+   bool Send(const OrderRequest &request, int &retcode)
+     {
+      int index = ArraySize(m_positions);
+      ArrayResize(m_positions, index + 1);
+
+      m_positions[index].ticket     = m_nextTicket++;
+      m_positions[index].magic      = m_magic;
+      m_positions[index].symbol     = request.symbol;
+      m_positions[index].type       = (request.type == ORDER_TYPE_BUY
+                                       ? POSITION_TYPE_BUY : POSITION_TYPE_SELL);
+      m_positions[index].volume     = request.volume;
+      m_positions[index].openPrice  = request.price;
+      m_positions[index].sl         = request.sl;
+      m_positions[index].tp         = request.tp;
+      m_positions[index].openTime   = m_openTime + (datetime)(index * 60);
+      m_positions[index].profit     = 0.0;
+      m_positions[index].swap       = 0.0;
+      m_positions[index].commission = 0.0;
+
+      m_sendCalls++;
+      retcode = 10009;
+      return(true);
+     }
+
+   bool Modify(const ulong ticket, const double sl, const double tp, int &retcode)
+     {
+      for(int i = 0; i < ArraySize(m_positions); i++)
+        {
+         if(m_positions[i].ticket == ticket)
+           {
+            m_positions[i].sl = sl;
+            m_positions[i].tp = tp;
+            m_modifyCalls++;
+            retcode = 10009;
+            return(true);
+           }
+        }
+
+      retcode = 10004;
+      return(false);
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| Backend simulado que crea y modifica posiciones en memoria.      |
+//+------------------------------------------------------------------+
+class CTestBrokerBackend : public IExecutionBackend
+  {
+private:
+   CTestBrokerState *m_state;
+
+public:
+   CTestBrokerBackend(CTestBrokerState *state)
+     {
+      m_state = state;
+     }
+
+   virtual bool Send(const OrderRequest &request, int &retcode)
+     {
+      return(m_state.Send(request, retcode));
+     }
+
+   virtual bool Modify(const ulong ticket, const double sl, const double tp, int &retcode)
+     {
+      return(m_state.Modify(ticket, sl, tp, retcode));
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| Fuente de canasta sobre el broker simulado.                      |
+//+------------------------------------------------------------------+
+class CTestBrokerBasketSource : public ILmBasketSource
+  {
+private:
+   CTestBrokerState *m_state;
+
+public:
+   CTestBrokerBasketSource(CTestBrokerState *state)
+     {
+      m_state = state;
+     }
+
+   virtual bool Scan(const long magic, BasketState &basket)
+     {
+      return(LmAggregateBasket(m_state.m_symbol, magic, m_state.m_positions, basket));
+     }
+
+   virtual int Positions(const long magic, BasketPosition &positions[])
+     {
+      ArrayResize(positions, 0);
+      int used = 0;
+
+      for(int i = 0; i < ArraySize(m_state.m_positions); i++)
+        {
+         if(m_state.m_positions[i].magic != magic ||
+            m_state.m_positions[i].symbol != m_state.m_symbol)
+            continue;
+
+         ArrayResize(positions, used + 1);
+         positions[used] = m_state.m_positions[i];
+         used++;
+        }
+
+      return(used);
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| Barras cerradas inyectadas para el runtime.                      |
+//+------------------------------------------------------------------+
+class CTestBarSource : public ILmBarSource
+  {
+private:
+   datetime m_barTime;
+   double   m_close1;
+   double   m_close2;
+   double   m_high1;
+   double   m_low2;
+   double   m_rsi;
+   bool     m_hasRsi;
+
+public:
+   CTestBarSource()
+     {
+      m_barTime = 0;
+      m_close1  = 0.0;
+      m_close2  = 0.0;
+      m_high1   = 0.0;
+      m_low2    = 0.0;
+      m_rsi     = 50.0;
+      m_hasRsi  = false;
+     }
+
+   void Set(const datetime barTime, const double close1, const double close2)
+     {
+      m_barTime = barTime;
+      m_close1  = close1;
+      m_close2  = close2;
+      m_high1   = MathMax(close1, close2);
+      m_low2    = MathMin(close1, close2);
+      m_hasRsi  = false;
+      m_rsi     = 50.0;
+     }
+
+   virtual bool BarTime(datetime &barTime)
+     {
+      barTime = m_barTime;
+      return(m_barTime > 0);
+     }
+
+   virtual bool Close(const int shift, double &value)
+     {
+      if(shift == 1)
+        {
+         value = m_close1;
+         return(true);
+        }
+
+      if(shift == 2)
+        {
+         value = m_close2;
+         return(true);
+        }
+
+      value = 0.0;
+      return(false);
+     }
+
+   virtual bool High(const int shift, double &value)
+     {
+      if(shift == 1)
+        {
+         value = m_high1;
+         return(true);
+        }
+
+      value = 0.0;
+      return(false);
+     }
+
+   virtual bool Low(const int shift, double &value)
+     {
+      if(shift == 2)
+        {
+         value = m_low2;
+         return(true);
+        }
+
+      value = 0.0;
+      return(false);
+     }
+
+   virtual bool Rsi(const int shift, double &value)
+     {
+      value = m_rsi;
+      return(m_hasRsi);
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| Limites y configuracion del runtime para las pruebas.            |
+//+------------------------------------------------------------------+
+SymbolLimits MakeRuntimeLimits()
+  {
+   SymbolLimits limits;
+
+   limits.symbol            = "TEST5";
+   limits.point             = 0.00001;
+   limits.volumeStep        = 0.01;
+   limits.volumeMin         = 0.01;
+   limits.volumeMax         = 100.0;
+   limits.stopsLevelPoints  = 20.0;
+   limits.freezeLevelPoints = 0.0;
+   limits.valid             = true;
+
+   return(limits);
+  }
+
+RuntimeConfig MakeRuntimeConfig()
+  {
+   RuntimeConfig config;
+
+   config.magic    = 111;
+   config.strategy = LM_STRATEGY_SCALPER_PRO;
+   config.risk     = LmDefaultRiskConfig();
+   config.session  = LmDefaultSessionConfig();
+
+   return(config);
   }
 
 //+------------------------------------------------------------------+
@@ -1072,6 +1395,315 @@ void TestMarketHandles()
   }
 
 //+------------------------------------------------------------------+
+//| 7.2 Cuenta hedging y 7.3 seleccion de estrategia.                |
+//+------------------------------------------------------------------+
+void TestAccountAndStrategySelection()
+  {
+   AssertTrue(LmIsHedgingAccount(ACCOUNT_MARGIN_MODE_RETAIL_HEDGING),
+              "una cuenta hedging es aceptada");
+   AssertTrue(!LmIsHedgingAccount(ACCOUNT_MARGIN_MODE_RETAIL_NETTING),
+              "una cuenta netting es rechazada");
+   AssertTrue(LmAccountModeError(ACCOUNT_MARGIN_MODE_RETAIL_NETTING) != "",
+              "la cuenta netting produce un mensaje explicito");
+   AssertTrue(LmAccountModeError(ACCOUNT_MARGIN_MODE_RETAIL_HEDGING) == "",
+              "la cuenta hedging no produce error");
+
+   AssertTrue(LmStrategyIsValid(LM_STRATEGY_SCALPER_PRO),
+              "Scalper Pro es una estrategia valida");
+   AssertTrue(LmStrategyIsValid(LM_STRATEGY_FIBONACCI_FOCUS),
+              "Fibonacci Focus es una estrategia valida");
+   AssertTrue(LmStrategyIsValid(LM_STRATEGY_TREND_MASTER),
+              "TrendMaster es una estrategia valida");
+   AssertTrue(!LmStrategyIsValid((ENUM_LM_STRATEGY)99),
+              "un valor fuera del enum es una estrategia invalida");
+   AssertTrue(LmStrategyName(LM_STRATEGY_SCALPER_PRO) == "Scalper Pro",
+              "el nombre de la estrategia es estable");
+
+   AssertEqualInt((int)LmEvaluateStrategy(LM_STRATEGY_SCALPER_PRO, 1.0990, 1.1000,
+                                          1.1000, 1.0990, false, 0.0),
+                  (int)SIGNAL_SELL,
+                  "la estrategia seleccionada evalua la regla de Scalper");
+   AssertEqualInt((int)LmEvaluateStrategy((ENUM_LM_STRATEGY)99, 1.0990, 1.1000,
+                                          1.1000, 1.0990, false, 0.0),
+                  (int)SIGNAL_NONE,
+                  "una estrategia invalida no produce senal");
+  }
+
+//+------------------------------------------------------------------+
+//| 7.1 Una evaluacion por barra cerrada.                            |
+//+------------------------------------------------------------------+
+void TestBarGate()
+  {
+   CLmBarGate gate;
+   datetime bar = D'2026.01.02 10:00:00';
+   int evaluations = 0;
+
+   for(int i = 0; i < 10; i++)
+     {
+      if(gate.ShouldEvaluate(bar))
+         evaluations++;
+     }
+
+   AssertEqualInt(evaluations, 1, "diez ticks de la misma barra producen una evaluacion");
+   AssertEqualInt(gate.Evaluations(), 1, "el contador del gate refleja una evaluacion");
+
+   AssertTrue(gate.ShouldEvaluate(bar + 3600),
+              "el cierre de la barra siguiente habilita otra evaluacion");
+   AssertEqualInt(gate.Evaluations(), 2, "el contador avanza al cambiar la barra");
+   AssertTrue(!gate.ShouldEvaluate(bar + 3600),
+              "un tick posterior de la misma barra no reevalua");
+  }
+
+//+------------------------------------------------------------------+
+//| 7.4 Filtro de sesion por hora del servidor.                      |
+//+------------------------------------------------------------------+
+void TestSessionGuard()
+  {
+   SessionConfig off = LmDefaultSessionConfig();
+   AssertTrue(LmSessionOpen(D'2026.01.02 03:00:00', off),
+              "sin filtro la sesion siempre esta abierta");
+
+   SessionConfig day;
+   day.enabled   = true;
+   day.startHour = 8;
+   day.endHour   = 17;
+
+   AssertTrue(LmSessionOpen(D'2026.01.02 09:00:00', day),
+              "la sesion diurna abre a las 09:00");
+   AssertTrue(!LmSessionOpen(D'2026.01.02 18:00:00', day),
+              "la sesion diurna cierra a las 18:00");
+
+   SessionConfig night;
+   night.enabled   = true;
+   night.startHour = 22;
+   night.endHour   = 6;
+
+   AssertTrue(LmSessionOpen(D'2026.01.02 23:00:00', night),
+              "la sesion nocturna abre antes de medianoche");
+   AssertTrue(LmSessionOpen(D'2026.01.02 03:00:00', night),
+              "la sesion nocturna sigue abierta despues de medianoche");
+   AssertTrue(!LmSessionOpen(D'2026.01.02 12:00:00', night),
+              "la sesion nocturna esta cerrada al mediodia");
+
+   SessionConfig invalid;
+   invalid.enabled   = true;
+   invalid.startHour = 25;
+   invalid.endHour   = 3;
+
+   AssertTrue(!LmSessionConfigValid(invalid),
+              "una hora de inicio invalida se detecta");
+  }
+
+//+------------------------------------------------------------------+
+//| 7.5 Pipeline completo: apertura, grid, proteccion y cierre.      |
+//+------------------------------------------------------------------+
+void TestRuntimePipeline()
+  {
+   CTestBrokerState broker;
+   broker.m_magic  = 111;
+   broker.m_symbol = "TEST5";
+
+   CTestBrokerBackend backend(&broker);
+   CTestBrokerBasketSource baskets(&broker);
+   CTestBarSource bars;
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   CMarketContext market;
+   AssertTrue(market.InitFromInstrument(instrument, 3.0, 25.0),
+              "el runtime inicia con un instrumento de prueba");
+
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   AssertTrue(executor.Init(&backend, &accounts, MakeRuntimeLimits(),
+                            MakeExecutionConfig(3, 0, 1000)),
+              "el runtime inicia con un ejecutor simulado");
+
+   CTestDailyStore store;
+   CDailyLossGuard daily;
+   AssertTrue(daily.Init(&store, 123456, 4.0),
+              "el runtime inicia con una guarda diaria de prueba");
+
+   RuntimeConfig config = MakeRuntimeConfig();
+   CLmRuntime runtime;
+   AssertTrue(runtime.Init(&market, &baskets, &bars, &executor, &daily, config),
+              "el runtime se inicializa");
+
+   datetime bar1 = D'2026.01.02 10:00:00';
+   bars.Set(bar1, 1.1000, 1.0990);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromTick(1.10000, 1.10002, bar1);
+
+   AssertTrue(runtime.ProcessTick(bar1, 10000.0, 10000.0),
+              "el primer tick se procesa");
+   AssertEqualInt(runtime.OrdersSent(), 1, "el pipeline abre la primera orden");
+   AssertEqualInt(broker.Count(), 1, "el broker simulado registra la apertura");
+
+   BasketPosition first = broker.PositionAt(0);
+   AssertEqualDouble(first.openPrice, 1.10002, 1e-9,
+                     "la primera orden se abre en el ask del snapshot");
+   AssertEqualDouble(first.volume, 0.10, 1e-9,
+                     "la primera orden respeta el tope por orden");
+   AssertEqualDouble(first.sl, 1.09602, 1e-9,
+                     "la primera orden lleva stop loss de canasta");
+   AssertEqualDouble(first.tp, 1.10082, 1e-9,
+                     "la primera orden lleva take profit de canasta");
+
+   //--- Diez ticks de la misma barra no generan otra evaluacion.
+   for(int i = 0; i < 10; i++)
+     {
+      market.RefreshFromTick(1.10000, 1.10002, bar1 + i);
+      runtime.ProcessTick(bar1 + i, 10000.0, 10000.0);
+     }
+
+   AssertEqualInt(runtime.Evaluations(), 1,
+                  "los ticks de la misma barra no reevaluan la senal");
+   AssertEqualInt(runtime.OrdersSent(), 1,
+                  "la misma barra no duplica la primera orden");
+
+   //--- El precio cae 22 pips: se agrega un paso de grid.
+   datetime bar2 = bar1 + 3600;
+   bars.Set(bar2, 1.0978, 1.0980);
+   broker.SetQuote(1.09780, 1.09782);
+   market.RefreshFromTick(1.09780, 1.09782, bar2);
+
+   AssertTrue(runtime.ProcessTick(bar2, 9900.0, 10000.0),
+              "el tick del grid se procesa");
+   AssertEqualInt(runtime.OrdersSent(), 2, "el pipeline agrega un paso de grid");
+   AssertEqualInt(broker.Count(), 2, "la canasta pasa a dos posiciones");
+
+   double expectedAverage = 1.09892;
+   double expectedSl      = expectedAverage - 0.0040;
+   double expectedTp      = expectedAverage + 0.0008;
+
+   for(int i = 0; i < broker.Count(); i++)
+     {
+      BasketPosition position = broker.PositionAt(i);
+      AssertEqualDouble(position.sl, expectedSl, 1e-9,
+                        StringFormat("la posicion %d recibe el nuevo SL", i + 1));
+      AssertEqualDouble(position.tp, expectedTp, 1e-9,
+                        StringFormat("la posicion %d recibe el nuevo TP", i + 1));
+     }
+
+   AssertTrue(runtime.ProtectionUpdates() >= 2,
+              "el paso de grid reenvia la proteccion a la canasta");
+
+   //--- El precio alcanza el TP: el broker cierra toda la canasta.
+   broker.SetQuote(1.09975, 1.09977);
+   AssertEqualInt(broker.Count(), 0, "el take profit cierra la canasta");
+
+   market.RefreshFromTick(1.09975, 1.09977, bar2 + 60);
+   runtime.ProcessTick(bar2 + 60, 10000.0, 10000.0);
+
+   AssertEqualInt(runtime.Closures(), 1, "el runtime detecta el cierre de la canasta");
+   AssertEqualInt(runtime.OrdersSent(), 2,
+                  "el tick de cierre no abre una orden nueva en la misma barra");
+  }
+
+//+------------------------------------------------------------------+
+//| 7.4 La canasta abierta se gestiona con cada guard activo.        |
+//+------------------------------------------------------------------+
+void TestRuntimeGuardsKeepManaging()
+  {
+   CTestBrokerState broker;
+   broker.m_magic  = 111;
+   broker.m_symbol = "TEST5";
+
+   CTestBrokerBackend backend(&broker);
+   CTestBrokerBasketSource baskets(&broker);
+   CTestBarSource bars;
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   CMarketContext market;
+   market.InitFromInstrument(instrument, 3.0, 25.0);
+
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   executor.Init(&backend, &accounts, MakeRuntimeLimits(),
+                 MakeExecutionConfig(3, 0, 1000));
+
+   CTestDailyStore store;
+   CDailyLossGuard daily;
+   daily.Init(&store, 123456, 4.0);
+
+   RuntimeConfig config = MakeRuntimeConfig();
+   config.session.enabled   = true;
+   config.session.startHour = 8;
+   config.session.endHour   = 17;
+
+   CLmRuntime runtime;
+   AssertTrue(runtime.Init(&market, &baskets, &bars, &executor, &daily, config),
+              "el runtime de guards se inicializa");
+
+   datetime bar1 = D'2026.01.02 10:00:00';
+   bars.Set(bar1, 1.1000, 1.0990);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromTick(1.10000, 1.10002, bar1);
+   runtime.ProcessTick(bar1, 10000.0, 10000.0);
+
+   AssertEqualInt(runtime.OrdersSent(), 1, "se abre una canasta para las pruebas de guards");
+
+   //--- Limite diario activo.
+   int orders = runtime.OrdersSent();
+   int updates = runtime.ProtectionUpdates();
+   broker.ClearProtection();
+   datetime barDaily = bar1 + 3600;
+   bars.Set(barDaily, 1.1000, 1.0990);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromTick(1.10000, 1.10002, barDaily);
+   runtime.ProcessTick(barDaily, 9500.0, 10000.0);
+
+   AssertTrue(runtime.ProtectionUpdates() > updates,
+              "la gestion sigue con el limite diario activo");
+   AssertEqualInt(runtime.OrdersSent(), orders,
+                  "el limite diario bloquea solo la apertura");
+
+   //--- Spread fuera de rango.
+   updates = runtime.ProtectionUpdates();
+   broker.ClearProtection();
+   datetime barSpread = bar1 + 7200;
+   bars.Set(barSpread, 1.1000, 1.0990);
+   broker.SetQuote(1.10000, 1.10050);
+   market.RefreshFromTick(1.10000, 1.10050, barSpread);
+   runtime.ProcessTick(barSpread, 9500.0, 10000.0);
+
+   AssertTrue(runtime.ProtectionUpdates() > updates,
+              "la gestion sigue con el spread bloqueado");
+   AssertEqualInt(runtime.OrdersSent(), orders,
+                  "el spread bloquea solo la apertura");
+
+   //--- Volatilidad alta.
+   updates = runtime.ProtectionUpdates();
+   broker.ClearProtection();
+   datetime barVolatility = bar1 + 10800;
+   bars.Set(barVolatility, 1.1000, 1.0990);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromValues(1.10000, 1.10002, barVolatility, true, 50.0);
+   runtime.ProcessTick(barVolatility, 9500.0, 10000.0);
+
+   AssertTrue(runtime.ProtectionUpdates() > updates,
+              "la gestion sigue con la volatilidad alta");
+   AssertEqualInt(runtime.OrdersSent(), orders,
+                  "la volatilidad alta bloquea solo la apertura");
+
+   //--- Sesion cerrada.
+   updates = runtime.ProtectionUpdates();
+   broker.ClearProtection();
+   datetime barSession = D'2026.01.02 18:00:00';
+   bars.Set(barSession, 1.1000, 1.0990);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromValues(1.10000, 1.10002, barSession, false, 0.0);
+   runtime.ProcessTick(barSession, 9500.0, 10000.0);
+
+   AssertTrue(runtime.ProtectionUpdates() > updates,
+              "la gestion sigue con la sesion cerrada");
+   AssertEqualInt(runtime.OrdersSent(), orders,
+                  "la sesion cerrada bloquea solo la apertura");
+
+   AssertEqualInt(broker.Count(), 1,
+                  "la canasta sigue abierta despues de los cuatro guards");
+  }
+
+//+------------------------------------------------------------------+
 //| Casos de prueba. Crece con cada modulo del motor.                |
 //+------------------------------------------------------------------+
 void RunTests()
@@ -1103,6 +1735,11 @@ void RunTests()
    TestScalperSignal();
    TestSignalCsvExport();
    TestSignalCsvComparator();
+   TestAccountAndStrategySelection();
+   TestBarGate();
+   TestSessionGuard();
+   TestRuntimePipeline();
+   TestRuntimeGuardsKeepManaging();
 
    if(InjectFailure)
       AssertTrue(false, "fallo inyectado a proposito");

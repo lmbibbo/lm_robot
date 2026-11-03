@@ -64,6 +64,54 @@ public:
   };
 
 //+------------------------------------------------------------------+
+//| Store en memoria para el Strategy Tester y pruebas aisladas.     |
+//| Cada corrida empieza sin estado persistido de corridas previas.  |
+//+------------------------------------------------------------------+
+class CMemoryDailyStore : public IDailyStateStore
+  {
+private:
+   string m_keys[];
+   double m_values[];
+
+public:
+   virtual bool Load(const string key, double &value)
+     {
+      value = 0.0;
+
+      for(int i = 0; i < ArraySize(m_keys); i++)
+        {
+         if(m_keys[i] == key)
+           {
+            value = m_values[i];
+            return(true);
+           }
+        }
+
+      return(false);
+     }
+
+   virtual bool Save(const string key, const double value)
+     {
+      for(int i = 0; i < ArraySize(m_keys); i++)
+        {
+         if(m_keys[i] == key)
+           {
+            m_values[i] = value;
+            return(true);
+           }
+        }
+
+      int index = ArraySize(m_keys);
+      ArrayResize(m_keys, index + 1);
+      ArrayResize(m_values, index + 1);
+
+      m_keys[index]   = key;
+      m_values[index] = value;
+      return(true);
+     }
+  };
+
+//+------------------------------------------------------------------+
 //| Deja el estado en neutro.                                        |
 //+------------------------------------------------------------------+
 void LmResetDailyLossState(DailyLossState &state)

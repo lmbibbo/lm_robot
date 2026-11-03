@@ -33,6 +33,8 @@ struct BasketPosition
    ENUM_POSITION_TYPE  type;
    double              volume;
    double              openPrice;
+   double              sl;
+   double              tp;
    datetime            openTime;
    double              profit;
    double              swap;
@@ -166,6 +168,46 @@ bool LmGridStepReached(const BasketState &basket,
   }
 
 //+------------------------------------------------------------------+
+//| SL y TP de canasta derivados del promedio ponderado.             |
+//+------------------------------------------------------------------+
+bool LmBasketProtectionPrices(const BasketState &basket,
+                              const double slPips,
+                              const double tpPips,
+                              const double pipSize,
+                              const int digits,
+                              double &sl,
+                              double &tp)
+  {
+   sl = 0.0;
+   tp = 0.0;
+
+   if(basket.count <= 0 || basket.averagePrice <= 0.0 ||
+      slPips <= 0.0 || tpPips <= 0.0 || pipSize <= 0.0)
+      return(false);
+
+   double slDistance = slPips * pipSize;
+   double tpDistance = tpPips * pipSize;
+
+   if(basket.direction == BASKET_DIRECTION_BUY)
+     {
+      sl = basket.averagePrice - slDistance;
+      tp = basket.averagePrice + tpDistance;
+     }
+   else if(basket.direction == BASKET_DIRECTION_SELL)
+     {
+      sl = basket.averagePrice + slDistance;
+      tp = basket.averagePrice - tpDistance;
+     }
+   else
+      return(false);
+
+   sl = NormalizeDouble(sl, digits);
+   tp = NormalizeDouble(tp, digits);
+
+   return(sl > 0.0 && tp > 0.0);
+  }
+
+//+------------------------------------------------------------------+
 //| Ciclo de vida persistente entre ticks.                           |
 //+------------------------------------------------------------------+
 class CBasketTracker
@@ -288,6 +330,8 @@ int LmCollectBasketPositions(const string symbol, const long magic,
       positions[used].type       = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       positions[used].volume     = PositionGetDouble(POSITION_VOLUME);
       positions[used].openPrice  = PositionGetDouble(POSITION_PRICE_OPEN);
+      positions[used].sl         = PositionGetDouble(POSITION_SL);
+      positions[used].tp         = PositionGetDouble(POSITION_TP);
       positions[used].openTime   = (datetime)PositionGetInteger(POSITION_TIME);
       positions[used].profit     = PositionGetDouble(POSITION_PROFIT);
       positions[used].swap       = PositionGetDouble(POSITION_SWAP);

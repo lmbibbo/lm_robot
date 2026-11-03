@@ -267,6 +267,7 @@ public:
      }
 
    void SetDeviation(const int points) { m_trade.SetDeviationInPoints(points); }
+   void SetMagic(const long magic)     { m_trade.SetExpertMagicNumber((ulong)magic); }
 
    virtual bool Send(const OrderRequest &request, int &retcode)
      {

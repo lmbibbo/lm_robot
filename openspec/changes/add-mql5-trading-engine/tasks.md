@@ -51,11 +51,11 @@
 
 ## 7. Integración del runtime
 
-- [ ] 7.1 Implementar `OnTick` con gestión en cada tick y evaluación de señal solo en barra cerrada; verificar con un contador que diez ticks producen una evaluación
-- [ ] 7.2 Validar cuenta hedging en `OnInit` y fallar con mensaje explícito; verificar simulando una cuenta netting
-- [ ] 7.3 Implementar la selección de estrategia por input y su validación; verificar un valor válido y uno inválido
-- [ ] 7.4 Integrar los guards de spread, volatilidad, sesión y límite diario solo sobre aperturas; verificar que una canasta abierta sigue gestionándose con cada guard activo
-- [ ] 7.5 Integrar el pipeline completo en el Strategy Tester; verificar que abre la primera orden, agrega un paso de grid, mueve TP y SL, y cierra la canasta
+- [x] 7.1 Implementar `OnTick` con gestión en cada tick y evaluación de señal solo en barra cerrada; verificar con un contador que diez ticks producen una evaluación
+- [x] 7.2 Validar cuenta hedging en `OnInit` y fallar con mensaje explícito; verificar simulando una cuenta netting
+- [x] 7.3 Implementar la selección de estrategia por input y su validación; verificar un valor válido y uno inválido
+- [x] 7.4 Integrar los guards de spread, volatilidad, sesión y límite diario solo sobre aperturas; verificar que una canasta abierta sigue gestionándose con cada guard activo
+- [x] 7.5 Integrar el pipeline completo en el Strategy Tester; verificar que abre la primera orden, agrega un paso de grid, mueve TP y SL, y cierra la canasta
 
 ## 8. Señales restantes
 
