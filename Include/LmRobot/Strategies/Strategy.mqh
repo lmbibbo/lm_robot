@@ -6,6 +6,8 @@
 #define LMROBOT_STRATEGIES_STRATEGY_MQH
 
 #include "Scalper.mqh"
+#include "Fibonacci.mqh"
+#include "TrendMaster.mqh"
 
 //+------------------------------------------------------------------+
 //| Estrategia activa de la instancia.                               |
@@ -47,8 +49,8 @@ string LmStrategyName(const ENUM_LM_STRATEGY strategy)
 //+------------------------------------------------------------------+
 //| Evalua la estrategia seleccionada.                               |
 //| close1/high1 son la barra cerrada (shift 1); close2/low2 la      |
-//| anterior (shift 2). Las reglas de Fibonacci y TrendMaster se     |
-//| conectan en la seccion 8; hasta entonces no generan entradas.    |
+//| anterior (shift 2). Todas las estrategias comparten el mismo     |
+//| contrato: solo devuelven BUY, SELL o NONE.                       |
 //+------------------------------------------------------------------+
 ENUM_SIGNAL_DIRECTION LmEvaluateStrategy(const ENUM_LM_STRATEGY strategy,
                                          const double close1, const double close2,
@@ -58,7 +60,12 @@ ENUM_SIGNAL_DIRECTION LmEvaluateStrategy(const ENUM_LM_STRATEGY strategy,
    if(strategy == LM_STRATEGY_SCALPER_PRO)
       return(LmScalperSignal(close2, close1));
 
-   //--- Fibonacci Focus y TrendMaster: pendientes en la seccion 8.
+   if(strategy == LM_STRATEGY_FIBONACCI_FOCUS)
+      return(LmFibonacciSignal(high1, low2, hasRsi, rsi));
+
+   if(strategy == LM_STRATEGY_TREND_MASTER)
+      return(LmTrendMasterSignal(close2, close1, hasRsi, rsi));
+
    return(SIGNAL_NONE);
   }
 

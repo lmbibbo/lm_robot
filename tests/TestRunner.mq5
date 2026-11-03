@@ -16,6 +16,8 @@
 #include "../Include/LmRobot/Risk/SessionGuard.mqh"
 #include "../Include/LmRobot/Strategies/Signal.mqh"
 #include "../Include/LmRobot/Strategies/Scalper.mqh"
+#include "../Include/LmRobot/Strategies/Fibonacci.mqh"
+#include "../Include/LmRobot/Strategies/TrendMaster.mqh"
 #include "../Include/LmRobot/Strategies/Strategy.mqh"
 #include "../Include/LmRobot/Harness/SignalCsv.mqh"
 
@@ -620,6 +622,12 @@ public:
       m_rsi     = 50.0;
      }
 
+   void SetRsi(const double rsi)
+     {
+      m_rsi    = rsi;
+      m_hasRsi = true;
+     }
+
    virtual bool BarTime(datetime &barTime)
      {
       barTime = m_barTime;
@@ -1176,6 +1184,60 @@ void TestScalperSignal()
   }
 
 //+------------------------------------------------------------------+
+//| 8.1 Senal pura de Fibonacci Focus: SELL, BUY y NONE.             |
+//+------------------------------------------------------------------+
+void TestFibonacciSignal()
+  {
+   AssertEqualInt((int)LmFibonacciSignal(1.1010, 1.0995, true, 40.0),
+                  (int)SIGNAL_SELL,
+                  "Fibonacci: high[1] > low[2] y RSI > 30 devuelve SELL");
+   AssertEqualInt((int)LmFibonacciSignal(1.0990, 1.1000, true, 60.0),
+                  (int)SIGNAL_BUY,
+                  "Fibonacci: high[1] <= low[2] y RSI < 70 devuelve BUY");
+   AssertEqualInt((int)LmFibonacciSignal(1.0990, 1.1000, true, 70.0),
+                  (int)SIGNAL_NONE,
+                  "Fibonacci: RSI >= 70 bloquea la rama de compra");
+   AssertEqualInt((int)LmFibonacciSignal(1.1010, 1.0995, true, 30.0),
+                  (int)SIGNAL_NONE,
+                  "Fibonacci: RSI <= 30 bloquea la rama de venta");
+   AssertEqualInt((int)LmFibonacciSignal(1.1010, 1.0995, false, 40.0),
+                  (int)SIGNAL_NONE,
+                  "Fibonacci: sin RSI la senal es NONE");
+
+   ENUM_SIGNAL_DIRECTION first  = LmFibonacciSignal(1.1010, 1.0995, true, 40.0);
+   ENUM_SIGNAL_DIRECTION second = LmFibonacciSignal(1.1010, 1.0995, true, 40.0);
+   AssertEqualInt((int)second, (int)first,
+                  "Fibonacci: dos evaluaciones con las mismas entradas son deterministas");
+  }
+
+//+------------------------------------------------------------------+
+//| 8.2 Senal pura de TrendMaster: SELL, BUY y NONE.                 |
+//+------------------------------------------------------------------+
+void TestTrendMasterSignal()
+  {
+   AssertEqualInt((int)LmTrendMasterSignal(1.1000, 1.0990, true, 40.0),
+                  (int)SIGNAL_SELL,
+                  "TrendMaster: close[2] > close[1] y RSI > 30 devuelve SELL");
+   AssertEqualInt((int)LmTrendMasterSignal(1.0990, 1.1000, true, 60.0),
+                  (int)SIGNAL_BUY,
+                  "TrendMaster: close[2] <= close[1] y RSI < 70 devuelve BUY");
+   AssertEqualInt((int)LmTrendMasterSignal(1.0990, 1.1000, true, 70.0),
+                  (int)SIGNAL_NONE,
+                  "TrendMaster: RSI >= 70 bloquea la rama de compra");
+   AssertEqualInt((int)LmTrendMasterSignal(1.1000, 1.0990, true, 30.0),
+                  (int)SIGNAL_NONE,
+                  "TrendMaster: RSI <= 30 bloquea la rama de venta");
+   AssertEqualInt((int)LmTrendMasterSignal(1.1000, 1.0990, false, 40.0),
+                  (int)SIGNAL_NONE,
+                  "TrendMaster: sin RSI la senal es NONE");
+
+   ENUM_SIGNAL_DIRECTION first  = LmTrendMasterSignal(1.1000, 1.0990, true, 40.0);
+   ENUM_SIGNAL_DIRECTION second = LmTrendMasterSignal(1.1000, 1.0990, true, 40.0);
+   AssertEqualInt((int)second, (int)first,
+                  "TrendMaster: dos evaluaciones con las mismas entradas son deterministas");
+  }
+
+//+------------------------------------------------------------------+
 //| 6.2 Exportacion CSV con fecha, estrategia, direccion y timeframe.|
 //+------------------------------------------------------------------+
 void TestSignalCsvExport()
@@ -1423,6 +1485,22 @@ void TestAccountAndStrategySelection()
                                           1.1000, 1.0990, false, 0.0),
                   (int)SIGNAL_SELL,
                   "la estrategia seleccionada evalua la regla de Scalper");
+   AssertEqualInt((int)LmEvaluateStrategy(LM_STRATEGY_FIBONACCI_FOCUS, 1.0990, 1.1000,
+                                          1.1000, 1.0990, true, 40.0),
+                  (int)SIGNAL_SELL,
+                  "la estrategia seleccionada evalua la regla de Fibonacci");
+   AssertEqualInt((int)LmEvaluateStrategy(LM_STRATEGY_FIBONACCI_FOCUS, 1.0990, 1.1000,
+                                          1.1000, 1.0990, true, 20.0),
+                  (int)SIGNAL_NONE,
+                  "Fibonacci comparte el contrato y puede devolver NONE");
+   AssertEqualInt((int)LmEvaluateStrategy(LM_STRATEGY_TREND_MASTER, 1.0990, 1.1000,
+                                          1.1000, 1.0990, true, 40.0),
+                  (int)SIGNAL_SELL,
+                  "la estrategia seleccionada evalua la regla de TrendMaster");
+   AssertEqualInt((int)LmEvaluateStrategy(LM_STRATEGY_TREND_MASTER, 1.0990, 1.1000,
+                                          1.1000, 1.0990, true, 20.0),
+                  (int)SIGNAL_NONE,
+                  "TrendMaster comparte el contrato y puede devolver NONE");
    AssertEqualInt((int)LmEvaluateStrategy((ENUM_LM_STRATEGY)99, 1.0990, 1.1000,
                                           1.1000, 1.0990, false, 0.0),
                   (int)SIGNAL_NONE,
@@ -1704,6 +1782,142 @@ void TestRuntimeGuardsKeepManaging()
   }
 
 //+------------------------------------------------------------------+
+//| 8.3 Solo la estrategia seleccionada abre y consume presupuesto.  |
+//+------------------------------------------------------------------+
+void TestStrategySelectionRuntime()
+  {
+   //--- Con estas barras: Scalper -> BUY, Fibonacci -> SELL, Trend -> NONE.
+   datetime bar = D'2026.01.02 10:00:00';
+
+   //--- Scalper Pro seleccionada: solo se abre su BUY.
+   CTestBrokerState scalperBroker;
+   scalperBroker.m_magic  = 111;
+   scalperBroker.m_symbol = "TEST5";
+
+   CTestBrokerBackend scalperBackend(&scalperBroker);
+   CTestBrokerBasketSource scalperBaskets(&scalperBroker);
+   CTestBarSource scalperBars;
+   scalperBars.Set(bar, 1.1000, 1.0990);
+   scalperBars.SetRsi(80.0);
+
+   InstrumentInfo scalperInstrument = MakeFiveDigitInstrument();
+   CMarketContext scalperMarket;
+   scalperMarket.InitFromInstrument(scalperInstrument, 3.0, 25.0);
+
+   CTestAccountProvider scalperAccounts(1000.0, 10.0);
+   CExecutor scalperExecutor;
+   scalperExecutor.Init(&scalperBackend, &scalperAccounts, MakeRuntimeLimits(),
+                        MakeExecutionConfig(3, 0, 1000));
+
+   CTestDailyStore scalperStore;
+   CDailyLossGuard scalperDaily;
+   scalperDaily.Init(&scalperStore, 123456, 4.0);
+
+   RuntimeConfig scalperConfig = MakeRuntimeConfig();
+   scalperConfig.strategy = LM_STRATEGY_SCALPER_PRO;
+
+   CLmRuntime scalperRuntime;
+   AssertTrue(scalperRuntime.Init(&scalperMarket, &scalperBaskets, &scalperBars,
+                                  &scalperExecutor, &scalperDaily, scalperConfig),
+              "el runtime de Scalper se inicializa");
+   scalperBroker.SetQuote(1.10000, 1.10002);
+   scalperMarket.RefreshFromTick(1.10000, 1.10002, bar);
+   scalperRuntime.ProcessTick(bar, 10000.0, 10000.0);
+
+   AssertEqualInt(scalperRuntime.OrdersSent(), 1,
+                  "Scalper abre una posicion con su propia senal");
+   AssertEqualInt(scalperBroker.Count(), 1, "el broker registra la orden de Scalper");
+   BasketPosition scalperPosition = scalperBroker.PositionAt(0);
+   AssertEqualInt((int)scalperPosition.type, (int)POSITION_TYPE_BUY,
+                  "Scalper abre la direccion que dicta su regla");
+
+   //--- Fibonacci Focus seleccionada: solo se abre su SELL.
+   CTestBrokerState fibBroker;
+   fibBroker.m_magic  = 111;
+   fibBroker.m_symbol = "TEST5";
+
+   CTestBrokerBackend fibBackend(&fibBroker);
+   CTestBrokerBasketSource fibBaskets(&fibBroker);
+   CTestBarSource fibBars;
+   fibBars.Set(bar, 1.1000, 1.0990);
+   fibBars.SetRsi(80.0);
+
+   InstrumentInfo fibInstrument = MakeFiveDigitInstrument();
+   CMarketContext fibMarket;
+   fibMarket.InitFromInstrument(fibInstrument, 3.0, 25.0);
+
+   CTestAccountProvider fibAccounts(1000.0, 10.0);
+   CExecutor fibExecutor;
+   fibExecutor.Init(&fibBackend, &fibAccounts, MakeRuntimeLimits(),
+                    MakeExecutionConfig(3, 0, 1000));
+
+   CTestDailyStore fibStore;
+   CDailyLossGuard fibDaily;
+   fibDaily.Init(&fibStore, 123456, 4.0);
+
+   RuntimeConfig fibConfig = MakeRuntimeConfig();
+   fibConfig.strategy = LM_STRATEGY_FIBONACCI_FOCUS;
+
+   CLmRuntime fibRuntime;
+   AssertTrue(fibRuntime.Init(&fibMarket, &fibBaskets, &fibBars,
+                              &fibExecutor, &fibDaily, fibConfig),
+              "el runtime de Fibonacci se inicializa");
+   fibBroker.SetQuote(1.10000, 1.10002);
+   fibMarket.RefreshFromTick(1.10000, 1.10002, bar);
+   fibRuntime.ProcessTick(bar, 10000.0, 10000.0);
+
+   AssertEqualInt(fibRuntime.OrdersSent(), 1,
+                  "Fibonacci abre una posicion con su propia senal");
+   AssertEqualInt(fibBroker.Count(), 1, "el broker registra la orden de Fibonacci");
+   BasketPosition fibPosition = fibBroker.PositionAt(0);
+   AssertEqualInt((int)fibPosition.type, (int)POSITION_TYPE_SELL,
+                  "Fibonacci abre SELL y no el BUY de Scalper");
+
+   //--- TrendMaster seleccionada: su rama es NONE y no consume presupuesto.
+   CTestBrokerState trendBroker;
+   trendBroker.m_magic  = 111;
+   trendBroker.m_symbol = "TEST5";
+
+   CTestBrokerBackend trendBackend(&trendBroker);
+   CTestBrokerBasketSource trendBaskets(&trendBroker);
+   CTestBarSource trendBars;
+   trendBars.Set(bar, 1.1000, 1.0990);
+   trendBars.SetRsi(80.0);
+
+   InstrumentInfo trendInstrument = MakeFiveDigitInstrument();
+   CMarketContext trendMarket;
+   trendMarket.InitFromInstrument(trendInstrument, 3.0, 25.0);
+
+   CTestAccountProvider trendAccounts(1000.0, 10.0);
+   CExecutor trendExecutor;
+   trendExecutor.Init(&trendBackend, &trendAccounts, MakeRuntimeLimits(),
+                      MakeExecutionConfig(3, 0, 1000));
+
+   CTestDailyStore trendStore;
+   CDailyLossGuard trendDaily;
+   trendDaily.Init(&trendStore, 123456, 4.0);
+
+   RuntimeConfig trendConfig = MakeRuntimeConfig();
+   trendConfig.strategy = LM_STRATEGY_TREND_MASTER;
+
+   CLmRuntime trendRuntime;
+   AssertTrue(trendRuntime.Init(&trendMarket, &trendBaskets, &trendBars,
+                                &trendExecutor, &trendDaily, trendConfig),
+              "el runtime de TrendMaster se inicializa");
+   trendBroker.SetQuote(1.10000, 1.10002);
+   trendMarket.RefreshFromTick(1.10000, 1.10002, bar);
+   trendRuntime.ProcessTick(bar, 10000.0, 10000.0);
+
+   AssertEqualInt(trendRuntime.OrdersSent(), 0,
+                  "TrendMaster con senal NONE no abre posiciones");
+   AssertEqualInt(trendBroker.Count(), 0,
+                  "el broker no recibe la senal de las otras estrategias");
+   BasketState trendBasketState = trendRuntime.Basket();
+   AssertEqualDouble(trendBasketState.volume, 0.0, 1e-9,
+                     "TrendMaster no consume presupuesto de canasta");
+  }
+
+//+------------------------------------------------------------------+
 //| Casos de prueba. Crece con cada modulo del motor.                |
 //+------------------------------------------------------------------+
 void RunTests()
@@ -1733,6 +1947,8 @@ void RunTests()
    TestDailyLossGuard();
    TestRiskManagementPriority();
    TestScalperSignal();
+   TestFibonacciSignal();
+   TestTrendMasterSignal();
    TestSignalCsvExport();
    TestSignalCsvComparator();
    TestAccountAndStrategySelection();
@@ -1740,6 +1956,7 @@ void RunTests()
    TestSessionGuard();
    TestRuntimePipeline();
    TestRuntimeGuardsKeepManaging();
+   TestStrategySelectionRuntime();
 
    if(InjectFailure)
       AssertTrue(false, "fallo inyectado a proposito");

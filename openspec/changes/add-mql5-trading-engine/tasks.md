@@ -59,9 +59,9 @@
 
 ## 8. Señales restantes
 
-- [ ] 8.1 Implementar Fibonacci Focus con la regla MT4 y sus tres resultados; verificar `SELL`, `BUY` y `NONE`
-- [ ] 8.2 Implementar TrendMaster con la regla MT4 y sus tres resultados; verificar `SELL`, `BUY` y `NONE`
-- [ ] 8.3 Conectar ambas al mismo contrato de señal; verificar que solo la estrategia seleccionada abre posiciones y que las otras dos no consumen presupuesto
+- [x] 8.1 Implementar Fibonacci Focus con la regla MT4 y sus tres resultados; verificar `SELL`, `BUY` y `NONE`
+- [x] 8.2 Implementar TrendMaster con la regla MT4 y sus tres resultados; verificar `SELL`, `BUY` y `NONE`
+- [x] 8.3 Conectar ambas al mismo contrato de señal; verificar que solo la estrategia seleccionada abre posiciones y que las otras dos no consumen presupuesto
 
 ## 9. Panel y operación
 

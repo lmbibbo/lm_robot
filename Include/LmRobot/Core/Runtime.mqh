@@ -374,9 +374,13 @@ private:
       if(!m_bars.Close(1, close1) || !m_bars.Close(2, close2))
          return(false);
 
-      m_bars.High(1, high1);
-      m_bars.Low(2, low2);
-      bool hasRsi = m_bars.Rsi(1, rsi);
+      bool hasHigh = m_bars.High(1, high1);
+      bool hasLow  = m_bars.Low(2, low2);
+      bool hasRsi  = m_bars.Rsi(1, rsi);
+
+      //--- Fibonacci necesita las dos barras completas para decidir.
+      if(m_config.strategy == LM_STRATEGY_FIBONACCI_FOCUS && (!hasHigh || !hasLow))
+         return(false);
 
       signal = LmEvaluateStrategy(m_config.strategy, close1, close2,
                                   high1, low2, hasRsi, rsi);
