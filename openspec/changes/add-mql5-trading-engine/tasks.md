@@ -65,10 +65,10 @@
 
 ## 9. Panel y operación
 
-- [ ] 9.1 Implementar el panel con estrategia, dirección, volumen, promedio, próximo grid, presupuesto consumido y PnL del día; verificar que los siete campos aparecen y se actualizan
-- [ ] 9.2 Implementar dirty flag para no redibujar sin cambios; verificar con un contador que los ticks sin cambio no incrementan redibujos
-- [ ] 9.3 Implementar limpieza de objetos y comentario en `OnDeinit`; verificar que no quedan objetos del EA en el gráfico
-- [ ] 9.4 Documentar operación (cuenta hedging, parámetros, límites, interpretación del panel) en `docs/operacion.md`; verificar que cada input del EA está explicado
+- [x] 9.1 Implementar el panel con estrategia, dirección, volumen, promedio, próximo grid, presupuesto consumido y PnL del día; verificar que los siete campos aparecen y se actualizan
+- [x] 9.2 Implementar dirty flag para no redibujar sin cambios; verificar con un contador que los ticks sin cambio no incrementan redibujos
+- [x] 9.3 Implementar limpieza de objetos y comentario en `OnDeinit`; verificar que no quedan objetos del EA en el gráfico
+- [x] 9.4 Documentar operación (cuenta hedging, parámetros, límites, interpretación del panel) en `docs/operacion.md`; verificar que cada input del EA está explicado
 
 ## 10. Verificación de integración
 

@@ -687,6 +687,8 @@ public:
    int          Closures()     { return(m_result.closures); }
    int          ProtectionUpdates() { return(m_result.protectionUpdates); }
    BasketState  Basket()       { return(m_basket); }
+   RuntimeConfig Config()      { return(m_config); }
+   DailyLossState DailyState() { return(m_dailyState); }
    bool         IsReady()      { return(m_ready); }
   };
 

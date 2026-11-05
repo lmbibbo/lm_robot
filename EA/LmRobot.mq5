@@ -8,6 +8,7 @@
 
 #include "../Include/LmRobot/Core/Account.mqh"
 #include "../Include/LmRobot/Core/Runtime.mqh"
+#include "../Include/LmRobot/UI/Dashboard.mqh"
 
 //--- Estrategia y ejecucion
 input ENUM_LM_STRATEGY Strategy = LM_STRATEGY_SCALPER_PRO; // Estrategia activa
@@ -54,6 +55,8 @@ IDailyStateStore         *g_dailyStore = NULL;
 CDailyLossGuard           g_daily;
 CExecutor                 g_executor;
 CLmRuntime                g_runtime;
+CChartDashboardRenderer   g_dashboardRenderer;
+CDashboard                g_dashboard;
 
 //+------------------------------------------------------------------+
 //| Expert initialization                                            |
@@ -175,6 +178,13 @@ int OnInit()
       return(INIT_FAILED);
      }
 
+   //--- 8. Panel de estado con dirty flag.
+   if(!g_dashboard.Init(&g_dashboardRenderer))
+     {
+      Print("LmRobot: no se pudo inicializar el panel");
+      return(INIT_FAILED);
+     }
+
    InstrumentInfo instrument = g_market.Instrument();
    PrintFormat("LmRobot: runtime inicializado en %s (estrategia=%s, digits=%d, pip=%s, valor_pip_lote=%s, cuenta=%s)",
                _Symbol, LmStrategyName(Strategy), instrument.digits,
@@ -190,6 +200,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   //--- El panel elimina sus objetos y limpia el comentario del grafico.
+   g_dashboard.Clear();
    g_market.ReleaseHandles();
   }
 
@@ -202,8 +214,21 @@ void OnTick()
    if(!g_market.Refresh())
       return;
 
-   g_runtime.ProcessTick(TimeTradeServer(),
-                         AccountInfoDouble(ACCOUNT_EQUITY),
-                         AccountInfoDouble(ACCOUNT_BALANCE));
+   double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
+   double balance  = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   g_runtime.ProcessTick(TimeTradeServer(), equity, balance);
+
+   //--- El panel solo se redibuja cuando cambio un campo relevante.
+   RuntimeConfig config = g_runtime.Config();
+   DashboardState panel = LmBuildDashboardState(config.strategy,
+                                                g_runtime.Basket(),
+                                                config.risk,
+                                                g_runtime.DailyState(),
+                                                g_market.Instrument(),
+                                                balance,
+                                                equity);
+
+   g_dashboard.Update(panel, _Symbol);
   }
 //+------------------------------------------------------------------+

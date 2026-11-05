@@ -19,6 +19,7 @@
 #include "../Include/LmRobot/Strategies/Fibonacci.mqh"
 #include "../Include/LmRobot/Strategies/TrendMaster.mqh"
 #include "../Include/LmRobot/Strategies/Strategy.mqh"
+#include "../Include/LmRobot/UI/Dashboard.mqh"
 #include "../Include/LmRobot/Harness/SignalCsv.mqh"
 
 //--- Fuerza un fallo para verificar que el runner realmente falla.
@@ -1918,6 +1919,205 @@ void TestStrategySelectionRuntime()
   }
 
 //+------------------------------------------------------------------+
+//| Estado de panel con una canasta abierta para las pruebas.        |
+//+------------------------------------------------------------------+
+DashboardState MakeTestDashboardState()
+  {
+   BasketPosition positions[2];
+   positions[0] = MakeBasketPosition(1, 111, "TEST5", POSITION_TYPE_BUY, 0.01, 1.1000,
+                                     D'2026.01.02 10:00:00');
+   positions[1] = MakeBasketPosition(2, 111, "TEST5", POSITION_TYPE_BUY, 0.02, 1.1010,
+                                     D'2026.01.02 10:05:00');
+
+   BasketState basket;
+   LmAggregateBasket("TEST5", 111, positions, basket);
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   RiskConfig risk = LmDefaultRiskConfig();
+
+   DailyLossState daily;
+   LmResetDailyLossState(daily);
+   daily.initialized = true;
+   daily.startEquity = 10000.0;
+   daily.equity      = 9950.0;
+
+   return(LmBuildDashboardState(LM_STRATEGY_SCALPER_PRO, basket, risk,
+                                daily, instrument, 10000.0, 9950.0));
+  }
+
+//+------------------------------------------------------------------+
+//| 9.1 Panel con los siete campos y su actualizacion.               |
+//+------------------------------------------------------------------+
+void TestDashboardFields()
+  {
+   DashboardState state = MakeTestDashboardState();
+
+   AssertTrue(state.valid, "el estado del panel es valido");
+   AssertEqualInt((int)state.strategy, (int)LM_STRATEGY_SCALPER_PRO,
+                  "el panel expone la estrategia activa");
+   AssertEqualInt((int)state.direction, (int)BASKET_DIRECTION_BUY,
+                  "el panel expone la direccion de la canasta");
+   AssertEqualDouble(state.volume, 0.03, 1e-9, "el panel expone el volumen total");
+   AssertEqualDouble(state.averagePrice, 1.1006666667, 1e-9,
+                     "el panel expone el promedio ponderado");
+   AssertEqualDouble(state.nextGridPrice, 1.0988, 1e-9,
+                     "el panel expone el proximo nivel de grid");
+   AssertEqualDouble(state.budgetUsedPct, 6.0, 1e-9,
+                     "el panel expone el presupuesto de riesgo consumido");
+   AssertEqualDouble(state.dailyPnl, -50.0, 1e-9,
+                     "el panel expone el PnL del dia");
+
+   string lines[];
+   AssertEqualInt(LmDashboardLines(state, "TEST5", lines), 8,
+                  "el panel contiene el titulo y los siete campos");
+   AssertTrue(StringFind(lines[1], "Scalper Pro") >= 0,
+              "el panel muestra la estrategia");
+   AssertTrue(StringFind(lines[2], "Compra") >= 0,
+              "el panel muestra la direccion");
+   AssertTrue(StringFind(lines[3], "0.03") >= 0,
+              "el panel muestra el volumen");
+   AssertTrue(StringFind(lines[4], "1.10067") >= 0,
+              "el panel muestra el promedio");
+   AssertTrue(StringFind(lines[5], "1.09880") >= 0,
+              "el panel muestra el proximo grid");
+   AssertTrue(StringFind(lines[6], "6.0%") >= 0,
+              "el panel muestra el presupuesto usado");
+   AssertTrue(StringFind(lines[7], "-50.00") >= 0,
+              "el panel muestra el PnL del dia");
+
+   //--- La canasta se cierra y la estrategia cambia: el panel se actualiza.
+   BasketPosition none[];
+   BasketState flat;
+   LmAggregateBasket("TEST5", 111, none, flat);
+
+   DailyLossState daily;
+   LmResetDailyLossState(daily);
+   daily.initialized = true;
+   daily.startEquity = 10000.0;
+   daily.equity      = 10000.0;
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   RiskConfig risk = LmDefaultRiskConfig();
+   DashboardState updated = LmBuildDashboardState(LM_STRATEGY_TREND_MASTER, flat, risk,
+                                                  daily, instrument, 10000.0, 10000.0);
+
+   string updatedLines[];
+   LmDashboardLines(updated, "TEST5", updatedLines);
+
+   AssertTrue(StringFind(updatedLines[1], "TrendMaster") >= 0,
+              "el panel actualiza la estrategia activa");
+   AssertTrue(StringFind(updatedLines[2], "Plana") >= 0,
+              "el panel actualiza la direccion a plana");
+   AssertTrue(StringFind(updatedLines[3], "0.00") >= 0,
+              "el panel actualiza el volumen a cero");
+   AssertTrue(StringFind(updatedLines[6], "0.0%") >= 0,
+              "el panel actualiza el presupuesto consumido a cero");
+   AssertTrue(StringFind(updatedLines[7], "0.00") >= 0,
+              "el panel actualiza el PnL del dia a cero");
+  }
+
+//+------------------------------------------------------------------+
+//| 9.2 Dirty flag: sin cambios no se redibuja.                      |
+//+------------------------------------------------------------------+
+class CTestDashboardRenderer : public IDashboardRenderer
+  {
+private:
+   int            m_renders;
+   int            m_clears;
+   DashboardState m_last;
+   string         m_lastSymbol;
+
+public:
+   CTestDashboardRenderer()
+     {
+      m_renders    = 0;
+      m_clears     = 0;
+      m_lastSymbol = "";
+      LmResetDashboardState(m_last);
+     }
+
+   virtual void Render(const DashboardState &state, const string symbol)
+     {
+      m_renders++;
+      m_last       = state;
+      m_lastSymbol = symbol;
+     }
+
+   virtual void Clear()
+     {
+      m_clears++;
+      m_lastSymbol = "";
+      LmResetDashboardState(m_last);
+     }
+
+   int Renders()       { return(m_renders); }
+   int Clears()        { return(m_clears); }
+   DashboardState Last() { return(m_last); }
+   string LastSymbol() { return(m_lastSymbol); }
+  };
+
+void TestDashboardDirtyFlag()
+  {
+   CTestDashboardRenderer renderer;
+   CDashboard dashboard;
+
+   AssertTrue(dashboard.Init(&renderer), "el panel se inicializa con un renderer");
+   AssertEqualInt(dashboard.RenderCount(), 0, "el panel arranca sin redibujos");
+
+   DashboardState state = MakeTestDashboardState();
+
+   AssertTrue(dashboard.Update(state, "TEST5"), "el primer estado dibuja el panel");
+   AssertEqualInt(renderer.Renders(), 1, "el renderer recibe el primer dibujo");
+   AssertEqualInt(dashboard.RenderCount(), 1, "el contador de redibujos arranca en uno");
+
+   AssertTrue(!dashboard.Update(state, "TEST5"), "un estado sin cambios no redibuja");
+   AssertEqualInt(dashboard.SkippedCount(), 1, "el tick sin cambios se omite");
+   AssertEqualInt(renderer.Renders(), 1, "el renderer no recibe un dibujo extra");
+
+   for(int i = 0; i < 10; i++)
+      dashboard.Update(state, "TEST5");
+
+   AssertEqualInt(dashboard.RenderCount(), 1,
+                  "diez ticks sin cambios no incrementan redibujos");
+   AssertEqualInt(renderer.Renders(), 1,
+                  "diez ticks sin cambios no llegan al renderer");
+   AssertEqualInt(dashboard.SkippedCount(), 11,
+                  "los once ticks sin cambios se contabilizan como omitidos");
+
+   state.dailyPnl = state.dailyPnl - 1.0;
+   AssertTrue(dashboard.Update(state, "TEST5"), "un cambio de PnL redibuja el panel");
+   AssertEqualInt(renderer.Renders(), 2, "el renderer recibe el dibujo actualizado");
+   AssertEqualDouble(renderer.Last().dailyPnl, -51.0, 1e-9,
+                     "el renderer recibe el estado actualizado");
+
+   dashboard.Clear();
+   AssertEqualInt(renderer.Clears(), 1, "la desinicializacion limpia el panel");
+   AssertTrue(!dashboard.HasState(), "tras limpiar no queda estado dibujado");
+  }
+
+//+------------------------------------------------------------------+
+//| 9.3 Limpieza de objetos y comentario en la desinicializacion.    |
+//+------------------------------------------------------------------+
+void TestDashboardCleanup()
+  {
+   DashboardState state = MakeTestDashboardState();
+   CChartDashboardRenderer renderer;
+
+   Comment("LMROBOT_TEST_COMMENT");
+   renderer.Render(state, "TEST5");
+   AssertEqualInt(renderer.ObjectCount(), 8,
+                  "el panel crea un objeto por cada linea");
+
+   renderer.Clear();
+   AssertEqualInt(renderer.ObjectCount(), 0,
+                  "la desinicializacion elimina todos los objetos del EA");
+
+   string comment = ChartGetString(0, CHART_COMMENT);
+   AssertTrue(StringLen(comment) == 0 && comment != "LMROBOT_TEST_COMMENT",
+              "la desinicializacion deja el comentario del grafico limpio");
+  }
+
+//+------------------------------------------------------------------+
 //| Casos de prueba. Crece con cada modulo del motor.                |
 //+------------------------------------------------------------------+
 void RunTests()
@@ -1957,6 +2157,9 @@ void RunTests()
    TestRuntimePipeline();
    TestRuntimeGuardsKeepManaging();
    TestStrategySelectionRuntime();
+   TestDashboardFields();
+   TestDashboardDirtyFlag();
+   TestDashboardCleanup();
 
    if(InjectFailure)
       AssertTrue(false, "fallo inyectado a proposito");
