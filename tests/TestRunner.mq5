@@ -2118,6 +2118,36 @@ void TestDashboardCleanup()
   }
 
 //+------------------------------------------------------------------+
+//| 10.4 El panel no crea objetos nuevos en ticks posteriores.       |
+//+------------------------------------------------------------------+
+void TestDashboardNoObjectsPerTick()
+  {
+   DashboardState state = MakeTestDashboardState();
+   CChartDashboardRenderer renderer;
+
+   renderer.Render(state, "TEST5");
+   AssertEqualInt(renderer.CreatedCount(), 8,
+                  "el primer render crea ocho objetos");
+   AssertEqualInt(renderer.ObjectCount(), 8,
+                  "el panel queda con ocho objetos");
+
+   for(int i = 0; i < 10; i++)
+     {
+      state.dailyPnl = state.dailyPnl - 1.0;
+      renderer.Render(state, "TEST5");
+     }
+
+   AssertEqualInt(renderer.CreatedCount(), 8,
+                  "diez ticks con cambios no crean objetos nuevos");
+   AssertEqualInt(renderer.ObjectCount(), 8,
+                  "diez ticks con cambios mantienen ocho objetos");
+
+   renderer.Clear();
+   AssertEqualInt(renderer.ObjectCount(), 0,
+                  "la prueba deja el grafico sin objetos del EA");
+  }
+
+//+------------------------------------------------------------------+
 //| Casos de prueba. Crece con cada modulo del motor.                |
 //+------------------------------------------------------------------+
 void RunTests()
@@ -2160,6 +2190,7 @@ void RunTests()
    TestDashboardFields();
    TestDashboardDirtyFlag();
    TestDashboardCleanup();
+   TestDashboardNoObjectsPerTick();
 
    if(InjectFailure)
       AssertTrue(false, "fallo inyectado a proposito");

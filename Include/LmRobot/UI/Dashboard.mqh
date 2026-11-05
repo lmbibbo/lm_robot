@@ -204,12 +204,19 @@ public:
 class CChartDashboardRenderer : public IDashboardRenderer
   {
 private:
+   int m_createdCount;
+
    string ObjectNameAt(const int index)
      {
       return(LM_DASHBOARD_PREFIX + IntegerToString(index));
      }
 
 public:
+   CChartDashboardRenderer()
+     {
+      m_createdCount = 0;
+     }
+
    virtual void Render(const DashboardState &state, const string symbol)
      {
       string lines[];
@@ -224,6 +231,7 @@ public:
             if(!ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0))
                continue;
 
+            m_createdCount++;
             ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
             ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 12);
             ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
@@ -269,6 +277,13 @@ public:
         }
 
       return(count);
+     }
+
+   //--- Objetos creados en toda la vida del renderer. Un segundo
+   //--- render sobre el mismo estado no debe incrementarlo.
+   int CreatedCount()
+     {
+      return(m_createdCount);
      }
   };
 

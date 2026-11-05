@@ -8,6 +8,7 @@
 
 #include "../Include/LmRobot/Core/Account.mqh"
 #include "../Include/LmRobot/Core/Runtime.mqh"
+#include "../Include/LmRobot/Harness/BacktestMetrics.mqh"
 #include "../Include/LmRobot/UI/Dashboard.mqh"
 
 //--- Estrategia y ejecucion
@@ -57,6 +58,7 @@ CExecutor                 g_executor;
 CLmRuntime                g_runtime;
 CChartDashboardRenderer   g_dashboardRenderer;
 CDashboard                g_dashboard;
+CBacktestMetrics          g_metrics;
 
 //+------------------------------------------------------------------+
 //| Expert initialization                                            |
@@ -170,6 +172,7 @@ int OnInit()
 
    g_bars.Init(_Symbol, _Period, g_market.RsiHandle());
    g_baskets.Init(_Symbol);
+   g_metrics.Reset(_Symbol, _Period, Strategy);
 
    if(!g_runtime.Init(&g_market, &g_baskets, &g_bars, &g_executor,
                       &g_daily, config))
@@ -216,8 +219,13 @@ void OnTick()
 
    double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
    double balance  = AccountInfoDouble(ACCOUNT_BALANCE);
+   datetime serverTime = TimeTradeServer();
 
-   g_runtime.ProcessTick(TimeTradeServer(), equity, balance);
+   g_runtime.ProcessTick(serverTime, equity, balance);
+
+   //--- Metricas de la corrida: drawdown observado y limite diario.
+   g_metrics.ObserveEquity(serverTime, equity);
+   g_metrics.ObserveDaily(g_runtime.DailyState());
 
    //--- El panel solo se redibuja cuando cambio un campo relevante.
    RuntimeConfig config = g_runtime.Config();
@@ -230,5 +238,43 @@ void OnTick()
                                                 equity);
 
    g_dashboard.Update(panel, _Symbol);
+  }
+
+//+------------------------------------------------------------------+
+//| Metricas de la corrida y artefacto por backtest.                 |
+//+------------------------------------------------------------------+
+double OnTester()
+  {
+   double finalBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double finalEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
+   double testerDd     = TesterStatistics(STAT_EQUITYDD_PERCENT);
+
+   BacktestSummary summary = g_metrics.Build(g_runtime.Result(),
+                                             g_runtime.Config(),
+                                             finalBalance,
+                                             finalEquity,
+                                             testerDd);
+
+   string filename = g_metrics.UniqueFilename("lm_robot_run");
+   string auditFilename = StringSubstr(filename, 0, StringLen(filename) - 4) + "_daily.csv";
+   double dailyLimit = g_runtime.Config().risk.dailyLossLimitPct;
+
+   if(g_metrics.Write(summary, filename, true))
+      g_metrics.Log(summary, filename);
+   else
+      PrintFormat("LM_BACKTEST ERROR no se pudo escribir %s", filename);
+
+   if(g_metrics.WriteDailyAudit(auditFilename, true, dailyLimit))
+     {
+      int auditHits = g_metrics.AuditHits(dailyLimit);
+      PrintFormat("LM_DAILY_AUDIT guard=%d audit=%d ok=%s file=%s",
+                  summary.dailyLimitHits, auditHits,
+                  (auditHits == summary.dailyLimitHits ? "SI" : "NO"),
+                  auditFilename);
+     }
+   else
+      PrintFormat("LM_DAILY_AUDIT ERROR no se pudo escribir %s", auditFilename);
+
+   return(TesterStatistics(STAT_PROFIT));
   }
 //+------------------------------------------------------------------+

@@ -225,6 +225,11 @@ struct RuntimeResult
    int        ordersSent;
    int        protectionUpdates;
    int        closures;
+   double     maxOrderVolume;
+   double     maxBasketVolume;
+   int        maxGridSteps;
+   double     maxProjectedLoss;
+   double     maxProjectedLossPct;
    string     lastReason;
   };
 
@@ -246,6 +251,35 @@ private:
    BasketState       m_basket;
    DailyLossState    m_dailyState;
    bool              m_ready;
+
+   //--- Registra el pico de exposicion y de perdida proyectada observado.
+   void UpdateExposure(const BasketState &basket, const double balance)
+     {
+      if(basket.volume > m_result.maxBasketVolume)
+         m_result.maxBasketVolume = basket.volume;
+
+      int steps = (basket.count > 0 ? basket.count - 1 : 0);
+      if(steps > m_result.maxGridSteps)
+         m_result.maxGridSteps = steps;
+
+      InstrumentInfo instrument = m_market.Instrument();
+      if(instrument.pipValuePerLot <= 0.0)
+         return;
+
+      double projected = basket.volume * m_config.risk.slPips *
+                         instrument.pipValuePerLot;
+
+      if(projected > m_result.maxProjectedLoss)
+         m_result.maxProjectedLoss = projected;
+
+      if(balance <= 0.0)
+         return;
+
+      //--- Porcentaje del balance, comparable con MaxBasketLossPct.
+      double usedPct = projected / balance * 100.0;
+      if(usedPct > m_result.maxProjectedLossPct)
+         m_result.maxProjectedLossPct = usedPct;
+     }
 
    //--- Proteccion de entrada de una orden nueva.
    bool EntryProtection(const ENUM_ORDER_TYPE type, const double price,
@@ -412,6 +446,10 @@ private:
       if(status == EXECUTION_STATUS_OK)
         {
          m_result.ordersSent++;
+
+         if(report.normalizedVolume > m_result.maxOrderVolume)
+            m_result.maxOrderVolume = report.normalizedVolume;
+
          m_result.lastReason = "";
          PrintFormat("LM_RUNTIME %s volume=%s price=%s sl=%s tp=%s",
                      comment,
@@ -468,8 +506,15 @@ private:
          return(false);
         }
 
-      return(SendOrder(type, plan.volume, price, sl, tp,
-                       "OPEN_FIRST " + LmStrategyName(m_config.strategy)));
+      if(!SendOrder(type, plan.volume, price, sl, tp,
+                    "OPEN_FIRST " + LmStrategyName(m_config.strategy)))
+         return(false);
+
+      //--- Relee la canasta para registrar la exposicion inicial.
+      m_baskets.Scan(m_config.magic, m_basket);
+      m_tracker.Update(m_basket);
+      UpdateExposure(m_basket, balance);
+      return(true);
      }
 
    //--- Paso de grid en la direccion de la canasta abierta.
@@ -547,6 +592,7 @@ private:
       //--- Relee la canasta para reenviar la nueva proteccion a todos.
       m_baskets.Scan(m_config.magic, m_basket);
       m_tracker.Update(m_basket);
+      UpdateExposure(m_basket, balance);
       ManageBasket();
       return(true);
      }
@@ -598,6 +644,11 @@ public:
       m_result.ordersSent        = 0;
       m_result.protectionUpdates = 0;
       m_result.closures          = 0;
+      m_result.maxOrderVolume    = 0.0;
+      m_result.maxBasketVolume   = 0.0;
+      m_result.maxGridSteps      = 0;
+      m_result.maxProjectedLoss  = 0.0;
+      m_result.maxProjectedLossPct = 0.0;
       m_result.lastReason        = "";
 
       return(true);
@@ -618,6 +669,7 @@ public:
       //--- 1. Estado de la canasta.
       m_baskets.Scan(m_config.magic, m_basket);
       m_tracker.Update(m_basket);
+      UpdateExposure(m_basket, balance);
 
       if(m_tracker.JustClosed())
         {

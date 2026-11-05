@@ -72,10 +72,10 @@
 
 ## 10. Verificación de integración
 
-- [ ] 10.1 Correr un backtest por estrategia y verificar en el reporte que no se superan volumen máximo, pasos máximos ni pérdida proyectada
-- [ ] 10.2 Correr un período con racha adversa y verificar que el conteo de activaciones del límite diario coincide con el reporte
-- [ ] 10.3 Verificar reproducibilidad: dos corridas idénticas producen el mismo CSV y las mismas métricas de `OnTester`
-- [ ] 10.4 Verificar que la compilación no tiene warnings y que el EA no crea handles ni objetos gráficos por tick
+- [x] 10.1 Correr un backtest por estrategia y verificar en el reporte que no se superan volumen máximo, pasos máximos ni pérdida proyectada
+- [x] 10.2 Correr un período con racha adversa y verificar que el conteo de activaciones del límite diario coincide con el reporte
+- [x] 10.3 Verificar reproducibilidad: dos corridas idénticas producen el mismo CSV y las mismas métricas de `OnTester`
+- [x] 10.4 Verificar que la compilación no tiene warnings y que el EA no crea handles ni objetos gráficos por tick
 
 ## Workflow follow-up
 
