@@ -61,7 +61,7 @@
 
 - [x] 8.1 Implementar Fibonacci Focus con la regla MT4 y sus tres resultados; verificar `SELL`, `BUY` y `NONE`
 - [x] 8.2 Implementar TrendMaster con la regla MT4 y sus tres resultados; verificar `SELL`, `BUY` y `NONE`
-- [x] 8.3 Conectar ambas al mismo contrato de señal; verificar que solo la estrategia seleccionada abre posiciones y que las otras dos no consumen presupuesto
+- [x] 8.3 Conectar ambas al mismo contrato de señal; verificar que en modo de estrategia única solo la seleccionada abre posiciones y que las otras dos no consumen presupuesto
 
 ## 9. Panel y operación
 
@@ -76,6 +76,16 @@
 - [x] 10.2 Correr un período con racha adversa y verificar que el conteo de activaciones del límite diario coincide con el reporte
 - [x] 10.3 Verificar reproducibilidad: dos corridas idénticas producen el mismo CSV y las mismas métricas de `OnTester`
 - [x] 10.4 Verificar que la compilación no tiene warnings y que el EA no crea handles ni objetos gráficos por tick
+
+## 11. Modo portafolio `Strategy=ALL`
+
+- [x] 11.1 Agregar `LM_STRATEGY_ALL` al enum, a la validación y al input `Strategy`; verificar que `ALL` inicializa y que un valor fuera de rango falla
+- [x] 11.2 Asignar un magic por estrategia en modo `ALL` (`MagicNumber + índice`) y mantener una canasta por magic; verificar que las tres canastas no se mezclan ni comparten promedio
+- [x] 11.3 Iterar señales y gestión por estrategia activa en cada barra y tick; verificar que las tres evalúan una vez por barra cerrada y que cada canasta se gestiona en cada tick
+- [x] 11.4 Implementar el presupuesto agregado de instancia (`MaxAggregateLossPct`, `MaxAggregateVolume`) además de los topes por canasta; verificar que un rechazo agregado no bloquea la gestión de las canastas abiertas
+- [x] 11.5 Extender el panel a una fila por estrategia más una fila agregada; verificar que los campos se actualizan sin recrear objetos
+- [x] 11.6 Exportar métricas de portafolio y atribución por magic (Net, DD y exposición por estrategia); verificar que la suma reconcilia con el total
+- [x] 11.7 Correr el backtest de portafolio con la config de comparación justa; verificar lote base 0,05 por estrategia, exposición concurrente por debajo del tope agregado y DD de cuenta
 
 ## Workflow follow-up
 

@@ -59,6 +59,7 @@ struct OrderRequest
    double            sl;
    double            tp;
    string            comment;
+   long              magic;
   };
 
 //+------------------------------------------------------------------+
@@ -273,6 +274,10 @@ public:
      {
       bool result = false;
 
+      //--- En modo portafolio cada estrategia envia con su propio magic.
+      if(request.magic > 0)
+         m_trade.SetExpertMagicNumber((ulong)request.magic);
+
       if(request.type == ORDER_TYPE_BUY)
          result = m_trade.Buy(request.volume, request.symbol, request.price,
                               request.sl, request.tp, request.comment);
@@ -408,6 +413,7 @@ public:
 
       OrderRequest normalized = request;
       normalized.volume = volume;
+      normalized.magic  = (request.magic > 0 ? request.magic : m_config.magic);
 
       uint start     = GetTickCount();
       bool sent      = false;

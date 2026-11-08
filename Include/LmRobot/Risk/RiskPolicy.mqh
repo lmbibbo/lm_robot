@@ -21,6 +21,8 @@ struct RiskConfig
    double   tpPips;
    double   gridStepPips;
    double   maxSpreadPips;
+   double   maxAggregateLossPct;
+   double   maxAggregateVolume;
   };
 
 //+------------------------------------------------------------------+
@@ -59,6 +61,11 @@ RiskConfig LmDefaultRiskConfig()
    config.tpPips              = 8.0;
    config.gridStepPips        = 22.0;
    config.maxSpreadPips       = 3.0;
+
+   //--- Modo portafolio (ALL): tres veces el tope por canasta.
+   //--- La comparacion justa los sube a 1000 % y 9 lotes.
+   config.maxAggregateLossPct = 6.0;
+   config.maxAggregateVolume  = 0.90;
 
    return(config);
   }
@@ -182,6 +189,38 @@ double LmCapVolumePerBasket(const double requestedVolume,
 bool LmMaxStepsReached(const int currentSteps, const int maxGridSteps)
   {
    return(currentSteps >= maxGridSteps);
+  }
+
+//+------------------------------------------------------------------+
+//| Presupuesto agregado de la instancia (modo portafolio ALL).      |
+//+------------------------------------------------------------------+
+double LmAggregateLossBudget(const double balance,
+                             const double maxAggregateLossPct)
+  {
+   if(balance <= 0.0 || maxAggregateLossPct <= 0.0)
+      return(0.0);
+
+   return(balance * maxAggregateLossPct / 100.0);
+  }
+
+bool LmFitsAggregateBudget(const double projectedLoss,
+                           const double balance,
+                           const double maxAggregateLossPct)
+  {
+   double budget = LmAggregateLossBudget(balance, maxAggregateLossPct);
+   return(projectedLoss <= budget + 1e-9);
+  }
+
+bool LmFitsAggregateVolume(const double totalVolume,
+                           const double maxAggregateVolume)
+  {
+   if(totalVolume <= 0.0)
+      return(true);
+
+   if(maxAggregateVolume <= 0.0)
+      return(false);
+
+   return(totalVolume <= maxAggregateVolume + 1e-9);
   }
 
 //+------------------------------------------------------------------+

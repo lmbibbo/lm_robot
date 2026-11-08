@@ -230,11 +230,126 @@ struct RuntimeResult
    int        maxGridSteps;
    double     maxProjectedLoss;
    double     maxProjectedLossPct;
+   int        strategyCount;
+   string     strategyNames[LM_MAX_ACTIVE_STRATEGIES];
+   long       strategyMagics[LM_MAX_ACTIVE_STRATEGIES];
+   int        strategyOrders[LM_MAX_ACTIVE_STRATEGIES];
+   double     strategyMaxVolume[LM_MAX_ACTIVE_STRATEGIES];
+   double     strategyMaxProjectedLossPct[LM_MAX_ACTIVE_STRATEGIES];
+   double     strategyMaxDrawdown[LM_MAX_ACTIVE_STRATEGIES];
+   double     maxAggregateVolume;
+   double     maxAggregateProjectedLoss;
+   double     maxAggregateProjectedLossPct;
    string     lastReason;
   };
 
 //+------------------------------------------------------------------+
+//| Una estrategia activa con su propia canasta, magic y metricas.   |
+//+------------------------------------------------------------------+
+class CStrategySlot
+  {
+public:
+   ENUM_LM_STRATEGY strategy;
+   long             magic;
+   BasketState      basket;
+   CBasketTracker   tracker;
+   int              ordersSent;
+   int              protectionUpdates;
+   int              closures;
+   double           maxOrderVolume;
+   double           maxBasketVolume;
+   int              maxGridSteps;
+   double           maxProjectedLoss;
+   double           maxProjectedLossPct;
+   double           lastOpenPnl;
+   double           realizedPnl;
+   double           pnlPeak;
+   double           maxDrawdownMoney;
+
+   CStrategySlot()
+     {
+      Reset(LM_STRATEGY_SCALPER_PRO, 0);
+     }
+
+   void Reset(const ENUM_LM_STRATEGY value, const long magicValue)
+     {
+      strategy          = value;
+      magic             = magicValue;
+      LmResetBasket(basket, "", magicValue);
+      tracker.Reset();
+      ordersSent        = 0;
+      protectionUpdates = 0;
+      closures          = 0;
+      maxOrderVolume    = 0.0;
+      maxBasketVolume   = 0.0;
+      maxGridSteps      = 0;
+      maxProjectedLoss  = 0.0;
+      maxProjectedLossPct = 0.0;
+      lastOpenPnl       = 0.0;
+      realizedPnl       = 0.0;
+      pnlPeak           = 0.0;
+      maxDrawdownMoney  = 0.0;
+     }
+
+   //--- Actualiza el estado y la serie de PnL usada para el DD.
+   void Observe(const BasketState &scanned)
+     {
+      bool hadPositions = (basket.count > 0);
+      if(hadPositions)
+         lastOpenPnl = basket.pnl;
+
+      basket = scanned;
+      tracker.Update(basket);
+
+      if(basket.count > 0)
+         lastOpenPnl = basket.pnl;
+
+      if(tracker.JustClosed())
+        {
+         //--- Ultimo PnL flotante observado antes del cierre.
+         realizedPnl += lastOpenPnl;
+         lastOpenPnl  = 0.0;
+        }
+
+      double series = realizedPnl + (basket.count > 0 ? basket.pnl : 0.0);
+      if(series > pnlPeak)
+         pnlPeak = series;
+
+      double drawdown = pnlPeak - series;
+      if(drawdown > maxDrawdownMoney)
+         maxDrawdownMoney = drawdown;
+     }
+
+   void ObserveExposure(const double balance, const RiskConfig &risk,
+                        const InstrumentInfo &instrument)
+     {
+      if(basket.volume > maxBasketVolume)
+         maxBasketVolume = basket.volume;
+
+      int steps = (basket.count > 0 ? basket.count - 1 : 0);
+      if(steps > maxGridSteps)
+         maxGridSteps = steps;
+
+      if(instrument.pipValuePerLot <= 0.0)
+         return;
+
+      double projected = LmProjectedLoss(basket.volume, risk.slPips,
+                                         instrument.pipValuePerLot);
+      if(projected > maxProjectedLoss)
+         maxProjectedLoss = projected;
+
+      if(balance <= 0.0)
+         return;
+
+      double usedPct = projected / balance * 100.0;
+      if(usedPct > maxProjectedLossPct)
+         maxProjectedLossPct = usedPct;
+     }
+  };
+
+//+------------------------------------------------------------------+
 //| Orquesta el ciclo del EA: gestion por tick y senal por barra.    |
+//| En modo ALL mantiene una canasta por estrategia en paralelo.     |
 //+------------------------------------------------------------------+
 class CLmRuntime
   {
@@ -245,40 +360,161 @@ private:
    CExecutor        *m_executor;
    CDailyLossGuard  *m_daily;
    RuntimeConfig     m_config;
-   CBasketTracker    m_tracker;
    CLmBarGate        m_barGate;
    RuntimeResult     m_result;
-   BasketState       m_basket;
+   CStrategySlot     m_slots[LM_MAX_ACTIVE_STRATEGIES];
+   int               m_slotCount;
    DailyLossState    m_dailyState;
    bool              m_ready;
 
-   //--- Registra el pico de exposicion y de perdida proyectada observado.
-   void UpdateExposure(const BasketState &basket, const double balance)
+   void ResetResult()
      {
-      if(basket.volume > m_result.maxBasketVolume)
-         m_result.maxBasketVolume = basket.volume;
+      m_result.ticks             = 0;
+      m_result.signalEvaluations = 0;
+      m_result.managementTicks   = 0;
+      m_result.ordersSent        = 0;
+      m_result.protectionUpdates = 0;
+      m_result.closures          = 0;
+      m_result.maxOrderVolume    = 0.0;
+      m_result.maxBasketVolume   = 0.0;
+      m_result.maxGridSteps      = 0;
+      m_result.maxProjectedLoss  = 0.0;
+      m_result.maxProjectedLossPct = 0.0;
+      m_result.strategyCount     = m_slotCount;
+      m_result.maxAggregateVolume = 0.0;
+      m_result.maxAggregateProjectedLoss = 0.0;
+      m_result.maxAggregateProjectedLossPct = 0.0;
+      m_result.lastReason        = "";
 
-      int steps = (basket.count > 0 ? basket.count - 1 : 0);
-      if(steps > m_result.maxGridSteps)
-         m_result.maxGridSteps = steps;
+      for(int i = 0; i < LM_MAX_ACTIVE_STRATEGIES; i++)
+        {
+         m_result.strategyNames[i]   = "";
+         m_result.strategyMagics[i]  = 0;
+         m_result.strategyOrders[i]  = 0;
+         m_result.strategyMaxVolume[i] = 0.0;
+         m_result.strategyMaxProjectedLossPct[i] = 0.0;
+         m_result.strategyMaxDrawdown[i] = 0.0;
+        }
+     }
+
+   //--- Copia las metricas por estrategia al resultado agregado.
+   void SyncSlotResults()
+     {
+      m_result.strategyCount = m_slotCount;
+      m_result.maxBasketVolume = 0.0;
+      m_result.maxGridSteps    = 0;
+      m_result.maxProjectedLoss = 0.0;
+      m_result.maxProjectedLossPct = 0.0;
+
+      for(int i = 0; i < m_slotCount; i++)
+        {
+         m_result.strategyNames[i]  = LmStrategyName(m_slots[i].strategy);
+         m_result.strategyMagics[i] = m_slots[i].magic;
+         m_result.strategyOrders[i] = m_slots[i].ordersSent;
+         m_result.strategyMaxVolume[i] = m_slots[i].maxBasketVolume;
+         m_result.strategyMaxProjectedLossPct[i] = m_slots[i].maxProjectedLossPct;
+         m_result.strategyMaxDrawdown[i] = m_slots[i].maxDrawdownMoney;
+
+         if(m_slots[i].maxBasketVolume > m_result.maxBasketVolume)
+            m_result.maxBasketVolume = m_slots[i].maxBasketVolume;
+
+         if(m_slots[i].maxGridSteps > m_result.maxGridSteps)
+            m_result.maxGridSteps = m_slots[i].maxGridSteps;
+
+         if(m_slots[i].maxProjectedLoss > m_result.maxProjectedLoss)
+            m_result.maxProjectedLoss = m_slots[i].maxProjectedLoss;
+
+         if(m_slots[i].maxProjectedLossPct > m_result.maxProjectedLossPct)
+            m_result.maxProjectedLossPct = m_slots[i].maxProjectedLossPct;
+        }
+     }
+
+   //--- Volumen y perdida proyectada de todas las canastas.
+   void AggregateSnapshot(double &totalVolume, double &projectedLoss)
+     {
+      totalVolume   = 0.0;
+      projectedLoss = 0.0;
+
+      InstrumentInfo instrument = m_market.Instrument();
+
+      for(int i = 0; i < m_slotCount; i++)
+        {
+         totalVolume += m_slots[i].basket.volume;
+
+         if(instrument.pipValuePerLot > 0.0)
+            projectedLoss += LmProjectedLoss(m_slots[i].basket.volume,
+                                             m_config.risk.slPips,
+                                             instrument.pipValuePerLot);
+        }
+     }
+
+   void UpdateAggregateExposure(const double balance)
+     {
+      double totalVolume = 0.0;
+      double projected   = 0.0;
+      AggregateSnapshot(totalVolume, projected);
+
+      if(totalVolume > m_result.maxAggregateVolume)
+         m_result.maxAggregateVolume = totalVolume;
+
+      if(projected > m_result.maxAggregateProjectedLoss)
+         m_result.maxAggregateProjectedLoss = projected;
+
+      if(balance > 0.0)
+        {
+         double usedPct = projected / balance * 100.0;
+         if(usedPct > m_result.maxAggregateProjectedLossPct)
+            m_result.maxAggregateProjectedLossPct = usedPct;
+        }
+     }
+
+   //--- Presupuesto agregado de la instancia, solo en modo ALL.
+   bool AggregateAllows(const int slotIndex, const double newVolume,
+                        const double balance)
+     {
+      if(m_slotCount <= 1)
+         return(true);
 
       InstrumentInfo instrument = m_market.Instrument();
       if(instrument.pipValuePerLot <= 0.0)
-         return;
+        {
+         m_result.lastReason = "valor del pip invalido para el presupuesto agregado";
+         return(false);
+        }
 
-      double projected = basket.volume * m_config.risk.slPips *
-                         instrument.pipValuePerLot;
+      double totalVolume = 0.0;
+      double projected   = 0.0;
 
-      if(projected > m_result.maxProjectedLoss)
-         m_result.maxProjectedLoss = projected;
+      for(int i = 0; i < m_slotCount; i++)
+        {
+         double volume = m_slots[i].basket.volume;
+         if(i == slotIndex)
+            volume += newVolume;
 
-      if(balance <= 0.0)
-         return;
+         totalVolume += volume;
+         projected += LmProjectedLoss(volume, m_config.risk.slPips,
+                                      instrument.pipValuePerLot);
+        }
 
-      //--- Porcentaje del balance, comparable con MaxBasketLossPct.
-      double usedPct = projected / balance * 100.0;
-      if(usedPct > m_result.maxProjectedLossPct)
-         m_result.maxProjectedLossPct = usedPct;
+      if(!LmFitsAggregateVolume(totalVolume, m_config.risk.maxAggregateVolume))
+        {
+         m_result.lastReason = StringFormat(
+            "tope de volumen agregado alcanzado (%.2f > %.2f)",
+            totalVolume, m_config.risk.maxAggregateVolume);
+         return(false);
+        }
+
+      if(!LmFitsAggregateBudget(projected, balance,
+                                m_config.risk.maxAggregateLossPct))
+        {
+         m_result.lastReason = StringFormat(
+            "presupuesto agregado agotado (%.2f%% > %.2f%%)",
+            (balance > 0.0 ? projected / balance * 100.0 : 0.0),
+            m_config.risk.maxAggregateLossPct);
+         return(false);
+        }
+
+      return(true);
      }
 
    //--- Proteccion de entrada de una orden nueva.
@@ -342,13 +578,13 @@ private:
      }
 
    //--- Reenvia SL/TP a toda la canasta si difieren del objetivo.
-   void ManageBasket()
+   void ManageBasket(CStrategySlot &slot)
      {
-      if(m_basket.count <= 0)
+      if(slot.basket.count <= 0)
          return;
 
       BasketPosition positions[];
-      int total = m_baskets.Positions(m_config.magic, positions);
+      int total = m_baskets.Positions(slot.magic, positions);
       if(total <= 0)
          return;
 
@@ -356,12 +592,12 @@ private:
       double sl = 0.0;
       double tp = 0.0;
 
-      if(!LmBasketProtectionPrices(m_basket, m_config.risk.slPips,
+      if(!LmBasketProtectionPrices(slot.basket, m_config.risk.slPips,
                                    m_config.risk.tpPips, instrument.pipSize,
                                    instrument.digits, sl, tp))
          return;
 
-      sl = BrokerValidStop(m_basket.direction, sl);
+      sl = BrokerValidStop(slot.basket.direction, sl);
       if(sl <= 0.0 || tp <= 0.0)
          return;
 
@@ -384,18 +620,20 @@ private:
       ExecutionReport report;
       m_executor.ModifyBasket(positions, sl, tp, report);
 
+      slot.protectionUpdates += report.modifiedCount;
       m_result.protectionUpdates += report.modifiedCount;
       m_result.lastReason = report.reason;
 
       if(report.modifiedCount > 0)
-         PrintFormat("LM_RUNTIME PROTECT positions=%d sl=%s tp=%s",
-                     report.modifiedCount,
+         PrintFormat("LM_RUNTIME PROTECT strategy=%s positions=%d sl=%s tp=%s",
+                     LmStrategyName(slot.strategy), report.modifiedCount,
                      DoubleToString(sl, instrument.digits),
                      DoubleToString(tp, instrument.digits));
      }
 
-   //--- Lee las barras cerradas y evalua la estrategia activa.
-   bool ReadSignal(ENUM_SIGNAL_DIRECTION &signal)
+   //--- Lee las barras cerradas y evalua una estrategia concreta.
+   bool ReadSignal(const ENUM_LM_STRATEGY strategy,
+                   ENUM_SIGNAL_DIRECTION &signal)
      {
       signal = SIGNAL_NONE;
 
@@ -413,18 +651,18 @@ private:
       bool hasRsi  = m_bars.Rsi(1, rsi);
 
       //--- Fibonacci necesita las dos barras completas para decidir.
-      if(m_config.strategy == LM_STRATEGY_FIBONACCI_FOCUS && (!hasHigh || !hasLow))
+      if(strategy == LM_STRATEGY_FIBONACCI_FOCUS && (!hasHigh || !hasLow))
          return(false);
 
-      signal = LmEvaluateStrategy(m_config.strategy, close1, close2,
+      signal = LmEvaluateStrategy(strategy, close1, close2,
                                   high1, low2, hasRsi, rsi);
       return(true);
      }
 
-   //--- Envia una orden y actualiza los contadores.
-   bool SendOrder(const ENUM_ORDER_TYPE type, const double volume,
-                  const double price, const double sl, const double tp,
-                  const string comment)
+   //--- Envia una orden y actualiza los contadores de la estrategia.
+   bool SendOrder(CStrategySlot &slot, const ENUM_ORDER_TYPE type,
+                  const double volume, const double price,
+                  const double sl, const double tp, const string comment)
      {
       if(volume <= 0.0 || price <= 0.0)
          return(false);
@@ -439,6 +677,7 @@ private:
       request.sl      = sl;
       request.tp      = tp;
       request.comment = comment;
+      request.magic   = slot.magic;
 
       ExecutionReport report;
       ENUM_EXECUTION_STATUS status = m_executor.Send(request, report);
@@ -446,13 +685,17 @@ private:
       if(status == EXECUTION_STATUS_OK)
         {
          m_result.ordersSent++;
+         slot.ordersSent++;
 
          if(report.normalizedVolume > m_result.maxOrderVolume)
             m_result.maxOrderVolume = report.normalizedVolume;
 
+         if(report.normalizedVolume > slot.maxOrderVolume)
+            slot.maxOrderVolume = report.normalizedVolume;
+
          m_result.lastReason = "";
-         PrintFormat("LM_RUNTIME %s volume=%s price=%s sl=%s tp=%s",
-                     comment,
+         PrintFormat("LM_RUNTIME %s strategy=%s magic=%I64d volume=%s price=%s sl=%s tp=%s",
+                     comment, LmStrategyName(slot.strategy), slot.magic,
                      DoubleToString(report.normalizedVolume, 2),
                      DoubleToString(price, instrument.digits),
                      DoubleToString(sl, instrument.digits),
@@ -465,10 +708,11 @@ private:
      }
 
    //--- Primera orden de una canasta nueva.
-   bool OpenFirst(const double balance)
+   bool OpenFirst(CStrategySlot &slot, const int slotIndex,
+                  const double balance)
      {
       ENUM_SIGNAL_DIRECTION signal = SIGNAL_NONE;
-      if(!ReadSignal(signal))
+      if(!ReadSignal(slot.strategy, signal))
         {
          m_result.lastReason = "no se pudieron leer las barras de la senal";
          return(false);
@@ -480,7 +724,7 @@ private:
          return(false);
         }
 
-      if(!m_tracker.CanOpenFirst())
+      if(!slot.tracker.CanOpenFirst())
          return(false);
 
       SymbolLimits limits = m_executor.Limits();
@@ -495,6 +739,9 @@ private:
          return(false);
         }
 
+      if(!AggregateAllows(slotIndex, plan.volume, balance))
+         return(false);
+
       ENUM_ORDER_TYPE type = (signal == SIGNAL_BUY ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
       double price = (type == ORDER_TYPE_BUY ? m_market.Ask() : m_market.Bid());
 
@@ -506,36 +753,38 @@ private:
          return(false);
         }
 
-      if(!SendOrder(type, plan.volume, price, sl, tp,
-                    "OPEN_FIRST " + LmStrategyName(m_config.strategy)))
+      if(!SendOrder(slot, type, plan.volume, price, sl, tp,
+                    "OPEN_FIRST " + LmStrategyName(slot.strategy)))
          return(false);
 
       //--- Relee la canasta para registrar la exposicion inicial.
-      m_baskets.Scan(m_config.magic, m_basket);
-      m_tracker.Update(m_basket);
-      UpdateExposure(m_basket, balance);
+      m_baskets.Scan(slot.magic, slot.basket);
+      slot.tracker.Update(slot.basket);
+      slot.ObserveExposure(balance, m_config.risk, instrument);
+      SyncSlotResults();
       return(true);
      }
 
    //--- Paso de grid en la direccion de la canasta abierta.
-   bool OpenGrid(const double balance)
+   bool OpenGrid(CStrategySlot &slot, const int slotIndex,
+                 const double balance)
      {
-      if(m_basket.count <= 0 ||
-         m_basket.direction == BASKET_DIRECTION_NONE)
+      if(slot.basket.count <= 0 ||
+         slot.basket.direction == BASKET_DIRECTION_NONE)
          return(false);
 
       SymbolLimits limits = m_executor.Limits();
       InstrumentInfo instrument = m_market.Instrument();
 
-      ENUM_ORDER_TYPE type = (m_basket.direction == BASKET_DIRECTION_BUY
+      ENUM_ORDER_TYPE type = (slot.basket.direction == BASKET_DIRECTION_BUY
                               ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
       double price = (type == ORDER_TYPE_BUY ? m_market.Ask() : m_market.Bid());
 
-      if(!LmGridStepReached(m_basket, price, m_config.risk.gridStepPips,
+      if(!LmGridStepReached(slot.basket, price, m_config.risk.gridStepPips,
                             instrument.pipSize))
          return(false);
 
-      if(m_tracker.StepCount() >= m_config.risk.maxGridSteps)
+      if(slot.tracker.StepCount() >= m_config.risk.maxGridSteps)
         {
          m_result.lastReason = "tope de pasos de grid alcanzado";
          return(false);
@@ -550,13 +799,13 @@ private:
          return(false);
         }
 
-      int stepNumber  = m_tracker.StepCount() + 1;
+      int stepNumber  = slot.tracker.StepCount() + 1;
       double requested = LmGridLot(initialPlan.volume, m_config.risk.lotMultiplier,
                                    stepNumber);
 
       RiskStepPlan plan;
       if(!LmPlanGridOrder(m_config.risk, balance, instrument.pipValuePerLot,
-                          m_basket.volume, m_tracker.StepCount(), requested,
+                          slot.basket.volume, slot.tracker.StepCount(), requested,
                           limits.volumeStep, limits.volumeMin, limits.volumeMax,
                           plan))
         {
@@ -564,14 +813,17 @@ private:
          return(false);
         }
 
+      if(!AggregateAllows(slotIndex, plan.volume, balance))
+         return(false);
+
       //--- Nuevo promedio proyectado con el volumen y precio del paso.
-      double newVolume = m_basket.volume + plan.volume;
+      double newVolume = slot.basket.volume + plan.volume;
       double newAverage = 0.0;
       if(newVolume > 0.0)
-         newAverage = (m_basket.averagePrice * m_basket.volume +
+         newAverage = (slot.basket.averagePrice * slot.basket.volume +
                        price * plan.volume) / newVolume;
 
-      BasketState projected = m_basket;
+      BasketState projected = slot.basket;
       projected.volume       = newVolume;
       projected.averagePrice = newAverage;
 
@@ -585,33 +837,35 @@ private:
          return(false);
         }
 
-      if(!SendOrder(type, plan.volume, price, sl, tp,
+      if(!SendOrder(slot, type, plan.volume, price, sl, tp,
                     StringFormat("OPEN_GRID step=%d", stepNumber)))
          return(false);
 
       //--- Relee la canasta para reenviar la nueva proteccion a todos.
-      m_baskets.Scan(m_config.magic, m_basket);
-      m_tracker.Update(m_basket);
-      UpdateExposure(m_basket, balance);
-      ManageBasket();
+      m_baskets.Scan(slot.magic, slot.basket);
+      slot.tracker.Update(slot.basket);
+      slot.ObserveExposure(balance, m_config.risk, instrument);
+      SyncSlotResults();
+      ManageBasket(slot);
       return(true);
      }
 
 public:
    CLmRuntime()
      {
-      m_market  = NULL;
-      m_baskets = NULL;
-      m_bars    = NULL;
+      m_market   = NULL;
+      m_baskets  = NULL;
+      m_bars     = NULL;
       m_executor = NULL;
-      m_daily   = NULL;
-      m_ready   = false;
+      m_daily    = NULL;
+      m_slotCount = 0;
+      m_ready    = false;
       m_config.magic    = 0;
       m_config.strategy = LM_STRATEGY_SCALPER_PRO;
       m_config.risk     = LmDefaultRiskConfig();
       m_config.session  = LmDefaultSessionConfig();
-      LmResetBasket(m_basket, "", 0);
       LmResetDailyLossState(m_dailyState);
+      ResetResult();
      }
 
    bool Init(CMarketContext *market, ILmBasketSource *baskets,
@@ -625,32 +879,36 @@ public:
       if(!LmSessionConfigValid(config.session))
          return(false);
 
+      ENUM_LM_STRATEGY list[];
+      int count = LmResolveStrategyList(config.strategy, list);
+      if(count <= 0 || count > LM_MAX_ACTIVE_STRATEGIES)
+         return(false);
+
       m_market   = market;
       m_baskets  = baskets;
       m_bars     = bars;
       m_executor = executor;
       m_daily    = daily;
       m_config   = config;
+      m_slotCount = count;
       m_ready    = true;
 
       m_barGate.Reset();
-      m_tracker.Reset();
-      LmResetBasket(m_basket, market.Instrument().symbol, config.magic);
       LmResetDailyLossState(m_dailyState);
 
-      m_result.ticks             = 0;
-      m_result.signalEvaluations = 0;
-      m_result.managementTicks   = 0;
-      m_result.ordersSent        = 0;
-      m_result.protectionUpdates = 0;
-      m_result.closures          = 0;
-      m_result.maxOrderVolume    = 0.0;
-      m_result.maxBasketVolume   = 0.0;
-      m_result.maxGridSteps      = 0;
-      m_result.maxProjectedLoss  = 0.0;
-      m_result.maxProjectedLossPct = 0.0;
-      m_result.lastReason        = "";
+      for(int i = 0; i < m_slotCount; i++)
+        {
+         m_slots[i].Reset(list[i], LmStrategyMagic(config.magic,
+                                                   config.strategy, i));
+         LmResetBasket(m_slots[i].basket, market.Instrument().symbol,
+                       m_slots[i].magic);
+        }
 
+      for(int i = m_slotCount; i < LM_MAX_ACTIVE_STRATEGIES; i++)
+         m_slots[i].Reset(LM_STRATEGY_SCALPER_PRO, 0);
+
+      ResetResult();
+      SyncSlotResults();
       return(true);
      }
 
@@ -666,20 +924,34 @@ public:
          return(false);
         }
 
-      //--- 1. Estado de la canasta.
-      m_baskets.Scan(m_config.magic, m_basket);
-      m_tracker.Update(m_basket);
-      UpdateExposure(m_basket, balance);
+      InstrumentInfo instrument = m_market.Instrument();
 
-      if(m_tracker.JustClosed())
+      //--- 1. Estado de cada canasta y gestion en cada tick.
+      m_result.managementTicks++;
+
+      for(int i = 0; i < m_slotCount; i++)
         {
-         m_result.closures++;
-         PrintFormat("LM_RUNTIME CLOSED");
+         BasketState scanned;
+         m_baskets.Scan(m_slots[i].magic, scanned);
+         m_slots[i].Observe(scanned);
+         m_slots[i].ObserveExposure(balance, m_config.risk, instrument);
+
+         if(m_slots[i].tracker.JustClosed())
+           {
+            m_slots[i].closures++;
+            m_result.closures++;
+            PrintFormat("LM_RUNTIME CLOSED strategy=%s magic=%I64d",
+                        LmStrategyName(m_slots[i].strategy),
+                        m_slots[i].magic);
+           }
         }
 
-      //--- 2. Gestion en cada tick, antes de cualquier guard.
-      m_result.managementTicks++;
-      ManageBasket();
+      UpdateAggregateExposure(balance);
+      SyncSlotResults();
+
+      //--- 2. La gestion de posiciones abiertas nunca se bloquea.
+      for(int i = 0; i < m_slotCount; i++)
+         ManageBasket(m_slots[i]);
 
       //--- 3. Limite diario: se evalua siempre, pero solo bloquea entradas.
       bool dailyBlocked = false;
@@ -705,7 +977,8 @@ public:
       if(!m_barGate.ShouldEvaluate(barTime))
          return(true);
 
-      m_result.signalEvaluations++;
+      //--- Cada estrategia activa evalua su senal una vez por barra.
+      m_result.signalEvaluations += m_slotCount;
 
       //--- 5. Guards de entrada, nunca de gestion.
       bool sessionOpen = LmSessionOpen(serverTime, m_config.session);
@@ -724,12 +997,18 @@ public:
          return(false);
         }
 
-      //--- 6. Primera orden o paso de grid.
-      if(m_basket.count > 0)
-         OpenGrid(balance);
-      else
-         OpenFirst(balance);
+      //--- 6. Cada estrategia abre su propia canasta o su paso de grid.
+      for(int i = 0; i < m_slotCount; i++)
+        {
+         if(m_slots[i].basket.count > 0)
+            OpenGrid(m_slots[i], i, balance);
+         else
+            OpenFirst(m_slots[i], i, balance);
+        }
 
+      //--- La exposicion agregada incluye lo abierto en esta misma barra.
+      UpdateAggregateExposure(balance);
+      SyncSlotResults();
       return(true);
      }
 
@@ -738,10 +1017,23 @@ public:
    int          Evaluations()  { return(m_result.signalEvaluations); }
    int          Closures()     { return(m_result.closures); }
    int          ProtectionUpdates() { return(m_result.protectionUpdates); }
-   BasketState  Basket()       { return(m_basket); }
+   BasketState  Basket()       { return(m_slots[0].basket); }
    RuntimeConfig Config()      { return(m_config); }
    DailyLossState DailyState() { return(m_dailyState); }
    bool         IsReady()      { return(m_ready); }
+   int          StrategyCount() { return(m_slotCount); }
+
+   bool StrategyAt(const int index, ENUM_LM_STRATEGY &strategy,
+                   BasketState &basket, long &magic)
+     {
+      if(index < 0 || index >= m_slotCount)
+         return(false);
+
+      strategy = m_slots[index].strategy;
+      basket   = m_slots[index].basket;
+      magic    = m_slots[index].magic;
+      return(true);
+     }
   };
 
 #endif // LMROBOT_CORE_RUNTIME_MQH

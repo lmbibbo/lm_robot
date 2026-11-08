@@ -4,7 +4,7 @@
 //+------------------------------------------------------------------+
 #property copyright "lm_robot"
 #property version   "1.00"
-#property description "Motor de trading MQL5 con una estrategia activa por grafico."
+#property description "Motor de trading MQL5 con una estrategia por instancia o portafolio Strategy=ALL."
 
 #include "../Include/LmRobot/Core/Account.mqh"
 #include "../Include/LmRobot/Core/Runtime.mqh"
@@ -35,6 +35,10 @@ input double MaxVolumePerStrategy  = 0.30; // Volumen maximo de la canasta
 input double SlPips                = 40.0; // Distancia del SL de canasta (pips)
 input double TpPips                = 8.0;  // Distancia del TP de canasta (pips)
 input double GridStepPips          = 22.0; // Distancia para el siguiente paso (pips)
+
+//--- Presupuesto agregado de la instancia (modo Strategy=ALL)
+input double MaxAggregateLossPct   = 6.0;  // Perdida agregada de la instancia (%)
+input double MaxAggregateVolume    = 0.90; // Volumen concurrente agregado (lotes)
 
 //--- Sesion
 input bool UseSessionFilter = false; // Habilita el filtro de sesion
@@ -97,7 +101,8 @@ int OnInit()
    if(RiskPct <= 0.0 || MaxBasketLossPct <= 0.0 || DailyLossLimitPct <= 0.0 ||
       MaxGridSteps < 0 || LotMultiplier <= 0.0 || MaxLotPerOrder <= 0.0 ||
       MaxVolumePerStrategy <= 0.0 || SlPips <= 0.0 || TpPips <= 0.0 ||
-      GridStepPips <= 0.0 || MaxSpreadPips <= 0.0 || MaxAtrPips <= 0.0)
+      GridStepPips <= 0.0 || MaxSpreadPips <= 0.0 || MaxAtrPips <= 0.0 ||
+      MaxAggregateLossPct <= 0.0 || MaxAggregateVolume <= 0.0)
      {
       Print("LmRobot: parametros de riesgo invalidos");
       return(INIT_FAILED);
@@ -169,6 +174,8 @@ int OnInit()
    config.risk.tpPips              = TpPips;
    config.risk.gridStepPips        = GridStepPips;
    config.risk.maxSpreadPips       = MaxSpreadPips;
+   config.risk.maxAggregateLossPct = MaxAggregateLossPct;
+   config.risk.maxAggregateVolume  = MaxAggregateVolume;
 
    g_bars.Init(_Symbol, _Period, g_market.RsiHandle());
    g_baskets.Init(_Symbol);
@@ -229,13 +236,23 @@ void OnTick()
 
    //--- El panel solo se redibuja cuando cambio un campo relevante.
    RuntimeConfig config = g_runtime.Config();
-   DashboardState panel = LmBuildDashboardState(config.strategy,
-                                                g_runtime.Basket(),
-                                                config.risk,
-                                                g_runtime.DailyState(),
-                                                g_market.Instrument(),
-                                                balance,
-                                                equity);
+   StrategyView views[LM_MAX_ACTIVE_STRATEGIES];
+   int viewCount = g_runtime.StrategyCount();
+
+   for(int i = 0; i < viewCount; i++)
+     {
+      long magic = 0;
+      ENUM_LM_STRATEGY strategy = LM_STRATEGY_SCALPER_PRO;
+      g_runtime.StrategyAt(i, strategy, views[i].basket, magic);
+      views[i].strategy = strategy;
+     }
+
+   DashboardState panel = LmBuildPortfolioDashboardState(views, viewCount,
+                                                          config.risk,
+                                                          g_runtime.DailyState(),
+                                                          g_market.Instrument(),
+                                                          balance,
+                                                          equity);
 
    g_dashboard.Update(panel, _Symbol);
   }

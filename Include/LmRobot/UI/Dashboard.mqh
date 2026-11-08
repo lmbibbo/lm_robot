@@ -15,6 +15,29 @@
 #define LM_DASHBOARD_PREFIX "LMROBOT_PANEL_"
 
 //+------------------------------------------------------------------+
+//| Fila del panel: una estrategia o el agregado de la instancia.    |
+//+------------------------------------------------------------------+
+struct DashboardRow
+  {
+   ENUM_LM_STRATEGY      strategy;
+   ENUM_BASKET_DIRECTION direction;
+   double                volume;
+   double                averagePrice;
+   double                nextGridPrice;
+   double                budgetUsedPct;
+   bool                  mixed;
+  };
+
+//+------------------------------------------------------------------+
+//| Vista de una estrategia activa para construir el panel.          |
+//+------------------------------------------------------------------+
+struct StrategyView
+  {
+   ENUM_LM_STRATEGY strategy;
+   BasketState      basket;
+  };
+
+//+------------------------------------------------------------------+
 //| Proyeccion del estado que muestra el panel.                      |
 //| No contiene indicadores ni valores derivados del mercado: solo   |
 //| lee BasketState, RiskConfig y DailyLossState.                    |
@@ -30,11 +53,26 @@ struct DashboardState
    double                dailyPnl;
    int                   digits;
    bool                  valid;
+   bool                  portfolio;
+   int                   rowCount;
+   DashboardRow          rows[LM_MAX_ACTIVE_STRATEGIES];
+   DashboardRow          aggregate;
   };
 
 //+------------------------------------------------------------------+
 //| Estado neutro del panel.                                         |
 //+------------------------------------------------------------------+
+void LmResetDashboardRow(DashboardRow &row)
+  {
+   row.strategy      = LM_STRATEGY_SCALPER_PRO;
+   row.direction     = BASKET_DIRECTION_NONE;
+   row.volume        = 0.0;
+   row.averagePrice  = 0.0;
+   row.nextGridPrice = 0.0;
+   row.budgetUsedPct = 0.0;
+   row.mixed         = false;
+  }
+
 void LmResetDashboardState(DashboardState &state)
   {
    state.strategy      = LM_STRATEGY_SCALPER_PRO;
@@ -46,6 +84,12 @@ void LmResetDashboardState(DashboardState &state)
    state.dailyPnl      = 0.0;
    state.digits        = 5;
    state.valid         = false;
+   state.portfolio     = false;
+   state.rowCount      = 0;
+   LmResetDashboardRow(state.aggregate);
+
+   for(int i = 0; i < LM_MAX_ACTIVE_STRATEGIES; i++)
+      LmResetDashboardRow(state.rows[i]);
   }
 
 //+------------------------------------------------------------------+
@@ -107,7 +151,26 @@ double LmRiskBudgetUsedPct(const double volume,
   }
 
 //+------------------------------------------------------------------+
-//| Construye el estado del panel a partir de los modulos del motor. |
+//| Llena una fila con el estado de una canasta.                     |
+//+------------------------------------------------------------------+
+void LmFillDashboardRow(DashboardRow &row, const ENUM_LM_STRATEGY strategy,
+                        const BasketState &basket, const RiskConfig &risk,
+                        const InstrumentInfo &instrument, const double balance)
+  {
+   row.strategy      = strategy;
+   row.direction     = basket.direction;
+   row.volume        = basket.volume;
+   row.averagePrice  = basket.averagePrice;
+   row.nextGridPrice = LmNextGridPrice(basket, risk.gridStepPips,
+                                       instrument.pipSize);
+   row.budgetUsedPct = LmRiskBudgetUsedPct(basket.volume, risk.slPips,
+                                           instrument.pipValuePerLot,
+                                           balance, risk.maxBasketLossPct);
+   row.mixed         = false;
+  }
+
+//+------------------------------------------------------------------+
+//| Construye el estado del panel para una sola estrategia.          |
 //+------------------------------------------------------------------+
 DashboardState LmBuildDashboardState(const ENUM_LM_STRATEGY strategy,
                                      const BasketState &basket,
@@ -142,6 +205,95 @@ DashboardState LmBuildDashboardState(const ENUM_LM_STRATEGY strategy,
   }
 
 //+------------------------------------------------------------------+
+//| Construye el panel de portafolio: una fila por estrategia y una  |
+//| fila agregada. Con una sola vista mantiene el formato clasico.   |
+//+------------------------------------------------------------------+
+DashboardState LmBuildPortfolioDashboardState(StrategyView &views[],
+                                              const int viewCount,
+                                              const RiskConfig &risk,
+                                              const DailyLossState &daily,
+                                              const InstrumentInfo &instrument,
+                                              const double balance,
+                                              const double equity)
+  {
+   DashboardState state;
+   LmResetDashboardState(state);
+
+   state.digits = (instrument.digits > 0 ? instrument.digits : 5);
+   state.valid  = true;
+
+   int total = MathMin(MathMax(viewCount, 0), LM_MAX_ACTIVE_STRATEGIES);
+   state.rowCount  = total;
+   state.portfolio = (total > 1);
+
+   double totalVolume   = 0.0;
+   double weightedPrice = 0.0;
+   double totalBudget   = 0.0;
+   bool   hasBuy        = false;
+   bool   hasSell       = false;
+
+   for(int i = 0; i < total; i++)
+     {
+      LmFillDashboardRow(state.rows[i], views[i].strategy, views[i].basket,
+                         risk, instrument, balance);
+
+      totalVolume   += state.rows[i].volume;
+      weightedPrice += state.rows[i].averagePrice * state.rows[i].volume;
+      totalBudget   += state.rows[i].budgetUsedPct;
+
+      if(state.rows[i].direction == BASKET_DIRECTION_BUY)
+         hasBuy = true;
+      else if(state.rows[i].direction == BASKET_DIRECTION_SELL)
+         hasSell = true;
+     }
+
+   state.aggregate.strategy      = (total > 0 ? views[0].strategy : LM_STRATEGY_ALL);
+   state.aggregate.volume        = totalVolume;
+   state.aggregate.averagePrice  = (totalVolume > 0.0 ? weightedPrice / totalVolume : 0.0);
+   state.aggregate.nextGridPrice = 0.0;
+   state.aggregate.budgetUsedPct = totalBudget;
+   state.aggregate.mixed         = (hasBuy && hasSell);
+   state.aggregate.direction     = (state.aggregate.mixed ? BASKET_DIRECTION_NONE :
+                                    (hasBuy ? BASKET_DIRECTION_BUY :
+                                     (hasSell ? BASKET_DIRECTION_SELL : BASKET_DIRECTION_NONE)));
+
+   //--- Campos clasicos: reflejan la primera estrategia activa.
+   if(total > 0)
+     {
+      state.strategy      = views[0].strategy;
+      state.direction     = state.rows[0].direction;
+      state.volume        = state.rows[0].volume;
+      state.averagePrice  = state.rows[0].averagePrice;
+      state.nextGridPrice = state.rows[0].nextGridPrice;
+      state.budgetUsedPct = state.rows[0].budgetUsedPct;
+     }
+
+   if(total > 1)
+      state.strategy = LM_STRATEGY_ALL;
+
+   if(daily.initialized && daily.startEquity > 0.0 && equity > 0.0)
+      state.dailyPnl = equity - daily.startEquity;
+
+   return(state);
+  }
+
+//+------------------------------------------------------------------+
+//| Compara dos filas con la tolerancia suficiente para no           |
+//| redibujar por ruido de punto flotante.                           |
+//+------------------------------------------------------------------+
+bool LmDashboardRowEquals(const DashboardRow &a, const DashboardRow &b)
+  {
+   if(a.strategy != b.strategy || a.direction != b.direction ||
+      a.mixed != b.mixed)
+      return(false);
+
+   return(MathAbs(a.volume - b.volume) <= 1e-9 &&
+          MathAbs(a.averagePrice - b.averagePrice) <= 1e-9 &&
+          MathAbs(a.nextGridPrice - b.nextGridPrice) <= 1e-9 &&
+          MathAbs(a.budgetUsedPct - b.budgetUsedPct) <= 1e-9);
+  }
+
+//+------------------------------------------------------------------+
 //| Compara dos estados con la tolerancia suficiente para no         |
 //| redibujar por ruido de punto flotante.                           |
 //+------------------------------------------------------------------+
@@ -151,6 +303,19 @@ bool LmDashboardStateEquals(const DashboardState &a, const DashboardState &b)
       a.direction != b.direction || a.digits != b.digits)
       return(false);
 
+   if(a.portfolio != b.portfolio || a.rowCount != b.rowCount)
+      return(false);
+
+   if(a.portfolio)
+     {
+      for(int i = 0; i < a.rowCount; i++)
+         if(!LmDashboardRowEquals(a.rows[i], b.rows[i]))
+            return(false);
+
+      if(!LmDashboardRowEquals(a.aggregate, b.aggregate))
+         return(false);
+     }
+
    return(MathAbs(a.volume - b.volume) <= 1e-9 &&
           MathAbs(a.averagePrice - b.averagePrice) <= 1e-9 &&
           MathAbs(a.nextGridPrice - b.nextGridPrice) <= 1e-9 &&
@@ -159,16 +324,53 @@ bool LmDashboardStateEquals(const DashboardState &a, const DashboardState &b)
   }
 
 //+------------------------------------------------------------------+
-//| Lineas del panel: titulo + los siete campos del contrato.        |
-//| Indices 1..7: estrategia, direccion, volumen, promedio, proximo  |
-//| grid, presupuesto consumido y PnL del dia.                       |
+//| Linea de una estrategia en el panel de portafolio.               |
+//+------------------------------------------------------------------+
+string LmDashboardRowLine(const DashboardRow &row, const int digits)
+  {
+   string direction = (row.mixed ? "Mixta" : LmBasketDirectionName(row.direction));
+
+   return(LmStrategyName(row.strategy) + ": " + direction +
+          " | Vol " + DoubleToString(row.volume, 2) +
+          " | Prom " + (row.averagePrice > 0.0
+                        ? DoubleToString(row.averagePrice, digits) : "-") +
+          " | Grid " + (row.nextGridPrice > 0.0
+                        ? DoubleToString(row.nextGridPrice, digits) : "-") +
+          " | Pres " + DoubleToString(row.budgetUsedPct, 1) + "%");
+  }
+
+//+------------------------------------------------------------------+
+//| Lineas del panel.                                               |
+//| Modo unico: titulo + los siete campos del contrato (8 lineas).   |
+//| Modo ALL: titulo + una fila por estrategia + agregado + PnL dia. |
 //+------------------------------------------------------------------+
 int LmDashboardLines(const DashboardState &state, const string symbol,
                      string &lines[])
   {
-   ArrayResize(lines, 8);
-
    int digits = (state.digits > 0 ? state.digits : 5);
+
+   if(state.portfolio && state.rowCount > 0)
+     {
+      int total = state.rowCount + 3;
+      ArrayResize(lines, total);
+
+      lines[0] = "LmRobot " + symbol;
+      for(int i = 0; i < state.rowCount; i++)
+         lines[1 + i] = LmDashboardRowLine(state.rows[i], digits);
+
+      string aggregateDirection = (state.aggregate.mixed
+                                   ? "Mixta"
+                                   : LmBasketDirectionName(state.aggregate.direction));
+
+      lines[1 + state.rowCount] = "Agregado: " + aggregateDirection +
+                                  " | Vol " + DoubleToString(state.aggregate.volume, 2) +
+                                  " | Pres " + DoubleToString(state.aggregate.budgetUsedPct, 1) + "%";
+      lines[2 + state.rowCount] = "PnL del dia: " + DoubleToString(state.dailyPnl, 2);
+
+      return(ArraySize(lines));
+     }
+
+   ArrayResize(lines, 8);
 
    lines[0] = "LmRobot " + symbol;
    lines[1] = "Estrategia: " + LmStrategyName(state.strategy);

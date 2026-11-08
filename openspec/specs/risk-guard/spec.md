@@ -34,9 +34,23 @@ Antes de abrir cualquier orden, el sistema DEBE calcular la pérdida proyectada 
 - **WHEN** la pérdida proyectada con el nuevo paso sigue dentro del presupuesto
 - **THEN** el paso se envía con el volumen calculado
 
+### Requirement: Presupuesto agregado en modo portafolio
+
+En modo `ALL`, antes de abrir cualquier orden el sistema DEBE comparar la pérdida proyectada de todas las canastas abiertas más la orden nueva contra un presupuesto agregado de instancia. Si lo supera, la orden NO DEBE enviarse. Los presupuestos por canasta siguen siendo independientes y el rechazo agregado NO DEBE impedir la gestión de las canastas existentes.
+
+#### Scenario: Apertura rechazada por el agregado
+
+- **WHEN** la pérdida proyectada de las tres canastas más la orden nueva supera `MaxAggregateLossPct`
+- **THEN** la orden no se envía y las canastas abiertas conservan su gestión
+
+#### Scenario: Gestión con el agregado agotado
+
+- **WHEN** el presupuesto agregado está agotado y una canasta alcanza su take profit
+- **THEN** el cierre se ejecuta igual y solo se bloquean las aperturas
+
 ### Requirement: Topes de volumen
 
-El sistema DEBE aplicar tres topes independientes: volumen máximo por orden, volumen máximo por canasta y cantidad máxima de pasos de grid. Un tope alcanzado NO DEBE impedir cerrar, mover o reducir posiciones existentes.
+El sistema DEBE aplicar topes independientes: volumen máximo por orden, volumen máximo por canasta y cantidad máxima de pasos de grid. En modo `ALL` DEBE aplicar además un tope de volumen concurrente agregado. Un tope alcanzado NO DEBE impedir cerrar, mover o reducir posiciones existentes.
 
 #### Scenario: Tope de pasos alcanzado
 
@@ -47,6 +61,11 @@ El sistema DEBE aplicar tres topes independientes: volumen máximo por orden, vo
 
 - **WHEN** el volumen calculado para un paso supera el máximo por orden
 - **THEN** se usa el máximo por orden o se rechaza el paso si eso excede el presupuesto de canasta
+
+#### Scenario: Tope agregado en modo portafolio
+
+- **WHEN** la suma del volumen de las tres canastas más el paso nuevo supera `MaxAggregateVolume`
+- **THEN** el paso no se envía y las canastas existentes siguen gestionándose
 
 ### Requirement: Stop loss obligatorio
 
@@ -64,7 +83,7 @@ Ninguna orden DEBE enviarse sin un stop loss válido y distinto de cero. Si el s
 
 ### Requirement: Límite de pérdida diaria
 
-El sistema DEBE comparar la equidad actual con la equidad registrada al inicio del día del servidor. Si la caída supera el porcentaje configurado, DEBE bloquear nuevas entradas hasta el inicio del día siguiente. El valor de referencia DEBE sobrevivir a un reinicio del terminal.
+El sistema DEBE comparar la equidad actual con la equidad registrada al inicio del día del servidor. Si la caída supera el porcentaje configurado, DEBE bloquear nuevas entradas hasta el inicio del día siguiente. El valor de referencia DEBE sobrevivir a un reinicio del terminal. En modo `ALL` el límite es de la instancia completa, no por estrategia.
 
 #### Scenario: Límite diario alcanzado
 
@@ -75,6 +94,11 @@ El sistema DEBE comparar la equidad actual con la equidad registrada al inicio d
 
 - **WHEN** el terminal se reinicia después de alcanzar el límite diario, el mismo día del servidor
 - **THEN** el bloqueo de entradas se mantiene
+
+#### Scenario: Límite diario en modo portafolio
+
+- **WHEN** `Strategy=ALL` alcanza el límite diario de la cuenta
+- **THEN** las tres estrategias dejan de abrir y las canastas abiertas siguen gestionándose
 
 ### Requirement: Los límites no interrumpen la gestión
 

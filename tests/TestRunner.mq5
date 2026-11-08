@@ -485,7 +485,7 @@ public:
       ArrayResize(m_positions, index + 1);
 
       m_positions[index].ticket     = m_nextTicket++;
-      m_positions[index].magic      = m_magic;
+      m_positions[index].magic      = (request.magic > 0 ? request.magic : m_magic);
       m_positions[index].symbol     = request.symbol;
       m_positions[index].type       = (request.type == ORDER_TYPE_BUY
                                        ? POSITION_TYPE_BUY : POSITION_TYPE_SELL);
@@ -2148,6 +2148,285 @@ void TestDashboardNoObjectsPerTick()
   }
 
 //+------------------------------------------------------------------+
+//| 11.1 Seleccion ALL: enum, lista de estrategias y magic.          |
+//+------------------------------------------------------------------+
+void TestStrategyAllSelection()
+  {
+   AssertTrue(LmStrategyIsValid(LM_STRATEGY_ALL),
+              "ALL es una estrategia valida");
+
+   AssertTrue(LmStrategyName(LM_STRATEGY_ALL) == "Portafolio ALL",
+              "ALL tiene un nombre estable");
+
+   ENUM_LM_STRATEGY list[];
+   AssertEqualInt(LmResolveStrategyList(LM_STRATEGY_ALL, list), 3,
+                  "ALL resuelve las tres estrategias");
+   AssertEqualInt((int)list[0], (int)LM_STRATEGY_SCALPER_PRO,
+                  "ALL incluye Scalper Pro");
+   AssertEqualInt((int)list[1], (int)LM_STRATEGY_FIBONACCI_FOCUS,
+                  "ALL incluye Fibonacci Focus");
+   AssertEqualInt((int)list[2], (int)LM_STRATEGY_TREND_MASTER,
+                  "ALL incluye TrendMaster");
+
+   AssertEqualInt(LmResolveStrategyList(LM_STRATEGY_SCALPER_PRO, list), 1,
+                  "una estrategia resuelve una sola");
+   AssertEqualInt((int)list[0], (int)LM_STRATEGY_SCALPER_PRO,
+                  "la lista unica conserva la estrategia elegida");
+
+   AssertTrue(LmStrategyMagic(202611030, LM_STRATEGY_ALL, 2) == 202611032,
+              "ALL asigna MagicNumber + indice");
+   AssertTrue(LmStrategyMagic(202611030, LM_STRATEGY_SCALPER_PRO, 2) == 202611030,
+              "modo unico conserva el magic base");
+
+   AssertEqualInt((int)LmEvaluateStrategy(LM_STRATEGY_ALL, 1.1000, 1.0990,
+                                          1.1010, 1.0980, true, 50.0),
+                  (int)SIGNAL_NONE,
+                  "ALL no es una senal: el runtime itera las estrategias");
+  }
+
+//+------------------------------------------------------------------+
+//| 11.4 Presupuesto agregado de la instancia.                       |
+//+------------------------------------------------------------------+
+void TestAggregateRiskCaps()
+  {
+   AssertEqualDouble(LmAggregateLossBudget(10000.0, 6.0), 600.0, 1e-9,
+                     "el presupuesto agregado es 6% del balance");
+
+   AssertTrue(LmFitsAggregateBudget(600.0, 10000.0, 6.0),
+              "la perdida agregada en el limite se acepta");
+   AssertTrue(!LmFitsAggregateBudget(601.0, 10000.0, 6.0),
+              "la perdida agregada por encima del limite se rechaza");
+
+   AssertTrue(LmFitsAggregateVolume(0.90, 0.90),
+              "el volumen agregado en el limite se acepta");
+   AssertTrue(!LmFitsAggregateVolume(0.91, 0.90),
+              "el volumen agregado por encima del limite se rechaza");
+  }
+
+//+------------------------------------------------------------------+
+//| 11.5 Panel de portafolio: una fila por estrategia + agregado.    |
+//+------------------------------------------------------------------+
+void TestPortfolioDashboard()
+  {
+   StrategyView views[LM_MAX_ACTIVE_STRATEGIES];
+
+   views[0].strategy = LM_STRATEGY_SCALPER_PRO;
+   LmResetBasket(views[0].basket, "TEST5", 111);
+   views[0].basket.count        = 1;
+   views[0].basket.volume       = 0.10;
+   views[0].basket.averagePrice = 1.10000;
+   views[0].basket.direction    = BASKET_DIRECTION_BUY;
+
+   views[1].strategy = LM_STRATEGY_FIBONACCI_FOCUS;
+   LmResetBasket(views[1].basket, "TEST5", 112);
+   views[1].basket.count        = 1;
+   views[1].basket.volume       = 0.20;
+   views[1].basket.averagePrice = 1.10500;
+   views[1].basket.direction    = BASKET_DIRECTION_SELL;
+
+   RiskConfig risk = LmDefaultRiskConfig();
+   DailyLossState daily;
+   LmResetDailyLossState(daily);
+   daily.initialized = true;
+   daily.startEquity = 10000.0;
+
+   DashboardState state = LmBuildPortfolioDashboardState(views, 2, risk, daily,
+                                                          MakeFiveDigitInstrument(),
+                                                          10000.0, 9900.0);
+
+   AssertTrue(state.portfolio, "el panel detecta el modo portafolio");
+   AssertEqualInt(state.rowCount, 2, "el panel muestra una fila por estrategia");
+   AssertEqualDouble(state.aggregate.volume, 0.30, 1e-9,
+                     "la fila agregada suma el volumen de las estrategias");
+   AssertTrue(state.aggregate.mixed,
+              "el agregado marca canastas de direcciones opuestas");
+   AssertEqualDouble(state.dailyPnl, -100.0, 1e-9,
+                     "el panel conserva el PnL del dia");
+
+   string lines[];
+   AssertEqualInt(LmDashboardLines(state, "TEST5", lines), 5,
+                  "portafolio de dos estrategias ocupa cinco lineas");
+  }
+
+//+------------------------------------------------------------------+
+//| 11.2/11.3 Canastas independientes y rechazo agregado.            |
+//+------------------------------------------------------------------+
+void TestRuntimePortfolio()
+  {
+   CTestBrokerState broker;
+   broker.m_magic  = 111;
+   broker.m_symbol = "TEST5";
+
+   CTestBrokerBackend backend(&broker);
+   CTestBrokerBasketSource baskets(&broker);
+   CTestBarSource bars;
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   CMarketContext market;
+   AssertTrue(market.InitFromInstrument(instrument, 3.0, 25.0),
+              "el portafolio inicia con un instrumento de prueba");
+
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   AssertTrue(executor.Init(&backend, &accounts, MakeRuntimeLimits(),
+                            MakeExecutionConfig(3, 0, 1000)),
+              "el portafolio inicia con un ejecutor simulado");
+
+   CTestDailyStore store;
+   CDailyLossGuard daily;
+   AssertTrue(daily.Init(&store, 123456, 4.0),
+              "el portafolio inicia con una guarda diaria de prueba");
+
+   RuntimeConfig config = MakeRuntimeConfig();
+   config.strategy = LM_STRATEGY_ALL;
+
+   //--- El tope agregado deja pasar solo dos de las tres canastas.
+   config.risk.maxAggregateVolume = 0.25;
+
+   CLmRuntime runtime;
+   AssertTrue(runtime.Init(&market, &baskets, &bars, &executor, &daily, config),
+              "el runtime de portafolio se inicializa");
+   AssertEqualInt(runtime.StrategyCount(), 3,
+                  "ALL mantiene tres estrategias activas");
+
+   datetime bar1 = D'2026.01.02 10:00:00';
+   bars.Set(bar1, 1.1000, 1.0990);
+   bars.SetRsi(50.0);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromTick(1.10000, 1.10002, bar1);
+
+   AssertTrue(runtime.ProcessTick(bar1, 10000.0, 10000.0),
+              "el primer tick del portafolio se procesa");
+
+   AssertEqualInt(runtime.Evaluations(), 3,
+                  "las tres estrategias evaluan una vez por barra");
+   AssertEqualInt(runtime.OrdersSent(), 2,
+                  "el tope agregado rechaza la tercera apertura");
+   AssertEqualInt(broker.Count(), 2,
+                  "solo dos canastas quedan abiertas");
+
+   int scalper = 0;
+   int fibonacci = 0;
+   int trend = 0;
+
+   for(int i = 0; i < broker.Count(); i++)
+     {
+      long magic = broker.PositionAt(i).magic;
+      if(magic == 111)
+         scalper++;
+      else if(magic == 112)
+         fibonacci++;
+      else if(magic == 113)
+         trend++;
+     }
+
+   AssertEqualInt(scalper, 1, "Scalper usa MagicNumber + 0");
+   AssertEqualInt(fibonacci, 1, "Fibonacci usa MagicNumber + 1");
+   AssertEqualInt(trend, 0, "Trend no abre por el tope agregado");
+
+   RuntimeResult result = runtime.Result();
+   AssertEqualInt(result.strategyCount, 3,
+                  "el resultado expone las tres estrategias");
+   AssertEqualDouble(result.maxAggregateVolume, 0.20, 1e-9,
+                     "la exposicion agregada observada es dos canastas");
+
+   //--- Un rechazo agregado no debe bloquear la gestion existente.
+   broker.ClearProtection();
+   market.RefreshFromTick(1.10000, 1.10002, bar1 + 1);
+   runtime.ProcessTick(bar1 + 1, 10000.0, 10000.0);
+
+   for(int i = 0; i < broker.Count(); i++)
+     {
+      AssertTrue(broker.PositionAt(i).sl > 0.0,
+                 "la canasta abierta conserva su stop loss");
+      AssertTrue(broker.PositionAt(i).tp > 0.0,
+                 "la canasta abierta conserva su take profit");
+     }
+
+   AssertEqualInt(runtime.Evaluations(), 3,
+                  "la misma barra no reevalua las tres senales");
+   AssertEqualInt(runtime.OrdersSent(), 2,
+                  "la misma barra no duplica las aperturas");
+  }
+
+//+------------------------------------------------------------------+
+//| 11.2 Canastas independientes por magic en modo ALL.              |
+//+------------------------------------------------------------------+
+void TestRuntimePortfolioIndependence()
+  {
+   CTestBrokerState broker;
+   broker.m_magic  = 111;
+   broker.m_symbol = "TEST5";
+
+   CTestBrokerBackend backend(&broker);
+   CTestBrokerBasketSource baskets(&broker);
+   CTestBarSource bars;
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   CMarketContext market;
+   AssertTrue(market.InitFromInstrument(instrument, 3.0, 25.0),
+              "la independencia inicia con un instrumento de prueba");
+
+   CTestAccountProvider accounts(10000.0, 10.0);
+   CExecutor executor;
+   AssertTrue(executor.Init(&backend, &accounts, MakeRuntimeLimits(),
+                            MakeExecutionConfig(3, 0, 1000)),
+              "la independencia inicia con un ejecutor simulado");
+
+   CTestDailyStore store;
+   CDailyLossGuard daily;
+   AssertTrue(daily.Init(&store, 123456, 4.0),
+              "la independencia inicia con una guarda diaria de prueba");
+
+   RuntimeConfig config = MakeRuntimeConfig();
+   config.strategy = LM_STRATEGY_ALL;
+
+   CLmRuntime runtime;
+   AssertTrue(runtime.Init(&market, &baskets, &bars, &executor, &daily, config),
+              "ALL inicializa con las tres estrategias");
+
+   //--- Un valor fuera de rango no debe inicializar el runtime.
+   RuntimeConfig invalid = config;
+   invalid.strategy = (ENUM_LM_STRATEGY)99;
+   CLmRuntime invalidRuntime;
+   AssertTrue(!invalidRuntime.Init(&market, &baskets, &bars, &executor, &daily, invalid),
+              "un valor de Strategy fuera de rango no inicializa");
+
+   datetime bar1 = D'2026.01.02 10:00:00';
+   bars.Set(bar1, 1.1000, 1.0990);
+   bars.SetRsi(50.0);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromTick(1.10000, 1.10002, bar1);
+
+   AssertTrue(runtime.ProcessTick(bar1, 10000.0, 10000.0),
+              "el tick con presupuesto suficiente se procesa");
+   AssertEqualInt(runtime.OrdersSent(), 3,
+                  "las tres estrategias abren su propia canasta");
+   AssertEqualInt(broker.Count(), 3,
+                  "el broker registra tres canastas separadas");
+
+   for(int i = 0; i < 3; i++)
+     {
+      ENUM_LM_STRATEGY strategy = LM_STRATEGY_SCALPER_PRO;
+      BasketState basket;
+      long magic = 0;
+
+      AssertTrue(runtime.StrategyAt(i, strategy, basket, magic),
+                 "la estrategia activa es legible por indice");
+      AssertTrue(magic == (long)(config.magic + i),
+                 "cada estrategia conserva su MagicNumber + indice");
+      AssertEqualInt(basket.count, 1,
+                     "cada canasta contiene solo sus propias posiciones");
+      AssertEqualDouble(basket.volume, 0.10, 1e-9,
+                        "cada canasta conserva su propio volumen");
+     }
+
+   RuntimeResult result = runtime.Result();
+   AssertEqualDouble(result.maxAggregateVolume, 0.30, 1e-9,
+                     "el agregado suma las tres canastas independientes");
+  }
+
+//+------------------------------------------------------------------+
 //| Casos de prueba. Crece con cada modulo del motor.                |
 //+------------------------------------------------------------------+
 void RunTests()
@@ -2191,6 +2470,11 @@ void RunTests()
    TestDashboardDirtyFlag();
    TestDashboardCleanup();
    TestDashboardNoObjectsPerTick();
+   TestStrategyAllSelection();
+   TestAggregateRiskCaps();
+   TestPortfolioDashboard();
+   TestRuntimePortfolio();
+   TestRuntimePortfolioIndependence();
 
    if(InjectFailure)
       AssertTrue(false, "fallo inyectado a proposito");

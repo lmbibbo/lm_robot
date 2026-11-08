@@ -6,24 +6,6 @@ Mantiene el estado de una canasta de posiciones por estrategia y define cuándo 
 
 ## ADDED Requirements
 
-### Requirement: Identidad de la canasta
-
-La canasta DEBE agrupar únicamente posiciones del símbolo actual cuyo magic number coincide con el de la estrategia activa. Las posiciones de otras estrategias u otros expertos NO DEBE contarse, promediarse ni modificarse.
-
-#### Scenario: Posiciones ajenas ignoradas
-
-- **WHEN** existen posiciones del mismo símbolo con otro magic number
-- **THEN** el conteo, el volumen y el precio promedio de la canasta no las incluyen
-
-### Requirement: Dirección única
-
-Mientras la canasta tenga posiciones abiertas, el sistema NO DEBE abrir posiciones en la dirección opuesta. La canasta solo puede crecer en la dirección de la primera orden.
-
-#### Scenario: Canasta de compra
-
-- **WHEN** la canasta tiene posiciones de compra abiertas y la señal indica venta
-- **THEN** no se abre ninguna posición de venta y la canasta permanece de compra
-
 ### Requirement: Precio promedio ponderado
 
 El precio promedio de la canasta DEBE calcularse como la suma de `precio de apertura * volumen` dividida por el volumen total. El take profit y el stop loss de canasta DEBE derivarse de ese promedio, no de la última orden.
@@ -65,9 +47,39 @@ Todas las posiciones de la canasta DEBE compartir un stop loss calculado desde e
 - **WHEN** la canasta queda abierta y el terminal se desconecta
 - **THEN** cada posición conserva en el broker un stop loss que limita la pérdida de la canasta
 
+## MODIFIED Requirements
+
+### Requirement: Identidad de la canasta
+
+La canasta DEBE agrupar únicamente posiciones del símbolo actual cuyo magic number coincide con el de la estrategia que la gestiona. Las posiciones de otras estrategias u otros expertos NO DEBE contarse, promediarse ni modificarse. En modo `ALL` DEBE existir una canasta por estrategia.
+
+#### Scenario: Posiciones ajenas ignoradas
+
+- **WHEN** existen posiciones del mismo símbolo con otro magic number
+- **THEN** el conteo, el volumen y el precio promedio de la canasta no las incluyen
+
+#### Scenario: Tres canastas en modo portafolio
+
+- **WHEN** `Strategy=ALL` y las tres estrategias tienen posiciones abiertas en el mismo símbolo
+- **THEN** cada canasta agrupa solo las posiciones de su magic y no comparte promedio ni conteo
+
+### Requirement: Dirección única
+
+Mientras una canasta tenga posiciones abiertas, el sistema NO DEBE abrir posiciones en la dirección opuesta dentro de esa canasta. La canasta solo puede crecer en la dirección de la primera orden. La regla es por canasta: en modo `ALL` dos estrategias pueden mantener canastas de direcciones opuestas y cada una se gestiona por separado.
+
+#### Scenario: Canasta de compra
+
+- **WHEN** la canasta tiene posiciones de compra abiertas y la señal indica venta
+- **THEN** no se abre ninguna posición de venta y la canasta permanece de compra
+
+#### Scenario: Canastas opuestas en modo portafolio
+
+- **WHEN** `Strategy=ALL` y Scalper tiene una canasta de compra mientras TrendMaster tiene una de venta
+- **THEN** cada canasta conserva su dirección y se gestiona con su propio promedio, TP y SL
+
 ### Requirement: Ciclo de vida de la canasta
 
-El sistema DEBE distinguir tres estados: sin posiciones, canasta abierta y canasta recién cerrada. Sin posiciones DEBE permitir la primera orden; con posiciones DEBE permitir solo pasos de grid; al quedar plana DEBE reiniciar el estado y el contador de pasos.
+Cada canasta DEBE distinguir tres estados: sin posiciones, canasta abierta y canasta recién cerrada. Sin posiciones DEBE permitir la primera orden; con posiciones DEBE permitir solo pasos de grid; al quedar plana DEBE reiniciar el estado y el contador de pasos.
 
 #### Scenario: Reinicio después del cierre
 

@@ -19,11 +19,12 @@ Restricciones de plataforma: MQL5, `CTrade`, cuenta hedging, `SYMBOL_TRADE_STOPS
 - Riesgo acotado en pesos, no solo en lotes.
 - Que ningún guard pueda dejar posiciones abiertas sin gestión.
 - Un harness que permita afirmar "las señales son las mismas" con evidencia.
+- Un modo portafolio opt-in (`Strategy=ALL`) que reproduzca la estructura de cuenta del MT4 para la comparación justa.
 
 **Non-Goals:**
 
 - Implementar Fibonacci real.
-- Exposición agregada a nivel de cuenta entre varios gráficos.
+- Exposición agregada a nivel de cuenta entre varios gráficos o instancias. El modo `ALL` sí agrega dentro de una sola instancia (ver D12).
 - Optimización genética, multi-símbolo y firma del binario.
 - Reproducir el panel decorativo de 49 indicadores.
 
@@ -43,9 +44,10 @@ BasketState.Scan(magic)        conteo, direccion, volumen, promedio, PnL
   +--> Manage(basket)          SL / TP / trailing / cierre   (siempre)
   |
   +--> if (barra nueva && guards OK)
-         signal = Strategy.Evaluate(context)
-         plan   = RiskPolicy.Plan(basket, signal)
-         Executor.Apply(plan)
+         for each active strategy:
+            signal = Strategy.Evaluate(context)
+            plan   = RiskPolicy.Plan(basket, signal)
+            Executor.Apply(plan)
   |
   v
 Dashboard.Render(state)        solo si cambio algo
@@ -53,19 +55,23 @@ Dashboard.Render(state)        solo si cambio algo
 
 **Por qué:** la señal se puede testear sin broker y comparar contra el MT4; el riesgo queda en un solo lugar auditable.
 
+En modo `ALL`, el bucle recorre las tres estrategias activas y cada una conserva su propia canasta y su magic.
+
 **Alternativas descartadas:** tres funciones paralelas (reproduce la duplicación actual) y un `OnTick` monolítico (no testeable).
 
-### D2. Una estrategia por gráfico, timeframe del gráfico
+### D2. Una estrategia por instancia por defecto, `Strategy=ALL` como modo portafolio
 
-El input `Strategy` selecciona una de las tres. La señal usa `_Period`. Se eliminan `Timeframe_Scalper` y `Timeframe_Trend` porque en el original solo gobernaban el trigger de barra nueva mientras la señal leía el gráfico.
+El input `Strategy` selecciona `SCALPER`, `FIBONACCI`, `TREND` o `ALL`. La señal usa `_Period`. Se eliminan `Timeframe_Scalper` y `Timeframe_Trend` porque en el original solo gobernaban el trigger de barra nueva mientras la señal leía el gráfico.
 
-**Por qué:** las señales de Scalper y Trend son la misma regla y Fibonacci es un short permanente; ejecutarlas juntas crea canastas opuestas y triplica margen sin diversificar.
+**Por qué el valor por defecto es una sola estrategia:** las señales de Scalper y Trend son la misma regla y Fibonacci es un short permanente; ejecutarlas juntas crea canastas opuestas y triplica margen sin diversificar. Para operación normal, una instancia por estrategia sigue siendo lo recomendado.
 
-**Alternativa descartada:** tres magics simultáneos con veto de dirección. Se puede reevaluar cuando existan señales realmente distintas.
+**Por qué existe `ALL`:** el MT4 de referencia corre las tres estrategias en una sola cuenta de 10.000 USD. Para comparar capital, margen, equidad y drawdown sin cambiar de base, el MT5 necesita poder reproducir esa estructura en una sola instancia. `ALL` es opt-in y no cambia el valor por defecto.
+
+**Alternativa descartada para el modo por defecto:** tres magics simultáneos con veto de dirección. En `ALL` no se aplica veto entre estrategias: cada canasta mantiene su propia dirección y se gestiona por separado (ver D3 y D12).
 
 ### D3. La canasta es la unidad de estado y de riesgo
 
-`BasketState` agrupa por `symbol + magic` y expone: cantidad, dirección, volumen total, precio promedio ponderado, PnL con swap y comisión, y el precio de la última orden.
+`BasketState` agrupa por `symbol + magic` y expone: cantidad, dirección, volumen total, precio promedio ponderado, PnL con swap y comisión, y el precio de la última orden. En modo `ALL` hay una canasta por estrategia y el runtime mantiene las tres en paralelo.
 
 **Por qué:** el TP de un grid solo tiene sentido sobre el promedio ponderado; el promedio simple del refactor no garantiza breakeven.
 
@@ -136,6 +142,23 @@ Un modo de exportación escribe `timestamp, estrategia, direccion, timeframe` a 
 
 **Por qué:** "mismas señales, riesgo distinto" solo es verificable si se puede aislar la señal del resultado económico.
 
+### D12. Modo portafolio `Strategy=ALL`
+
+`ALL` activa las tres estrategias en una sola instancia sobre el mismo símbolo. Asigna a cada estrategia un magic propio (`MagicNumber + índice`) y mantiene una canasta independiente por magic. Las tres comparten cuenta, margen, equidad y límite diario, pero conservan presupuesto y topes por canasta.
+
+Reglas del modo:
+
+- Cada estrategia evalúa su señal una vez por barra cerrada, con el mismo snapshot de mercado.
+- La dirección única es por canasta: dos estrategias pueden tener canastas opuestas y cada una se gestiona por separado.
+- El presupuesto de riesgo por canasta no se reparte entre estrategias; el MT4 también calcula el lote de cada estrategia sobre el balance completo.
+- Además de los topes por canasta, existe un presupuesto agregado de instancia (pérdida proyectada y volumen concurrente) que se configura por encima de la exposición esperada para no recortar la comparación.
+- El panel muestra una fila por estrategia y una fila agregada.
+- El harness exporta métricas de portafolio y atribución por magic. Los cierres forzados al final del test llegan con `magic=0`; la atribución recupera el magic del deal de apertura vía `DEAL_POSITION_ID` para que la suma reconcile con el Net de la cuenta.
+
+**Por qué:** es la única forma de comparar contra el MT4 sin sumar tres cuentas de 10k ni aproximar el drawdown. La reconstrucción post-hoc queda como fallback.
+
+**Alternativa descartada:** mantener `ALL` solo como script externo de reconstrucción. No modela margen ni equidad compartidos y el DD sería aproximado.
+
 ## Contratos entre módulos
 
 Conceptuales, no código final:
@@ -147,9 +170,10 @@ RiskPolicy.Plan(basket, signal)     -> { NONE, OPEN_FIRST, OPEN_GRID,
                                          UPDATE_PROTECTION, CLOSE_ALL }
 Executor.Apply(plan)                -> { OK, REJECTED, RETRY_EXHAUSTED }
 Dashboard.Render(basket, guard)     -> void
+Portfolio.Run(context)              -> por estrategia activa: Evaluate + Plan + Apply
 ```
 
-`RiskPolicy` es el único módulo que conoce el balance, el presupuesto y los topes. `Executor` es el único que habla con `CTrade`.
+`RiskPolicy` es el único módulo que conoce el balance, el presupuesto y los topes. `Executor` es el único que habla con `CTrade`. En modo `ALL`, `Portfolio` recorre las estrategias activas; cada una tiene su `Basket` y su `magic`.
 
 ## Fórmulas de referencia
 
@@ -162,7 +186,7 @@ lote_paso_n       = lote_inicial * LotMultiplier^n
 perdida_proyectada = (volumen_canasta + lote_paso) * SL_pips * valor_pip_por_lote
 ```
 
-Todos los límites se comparan contra `balance` (no `equity`) para que un drawdown flotante no habilite más riesgo.
+El dimensionamiento del lote y el presupuesto por canasta se comparan contra `balance`, para que un drawdown flotante no habilite más riesgo. El límite de pérdida diaria es la excepción: compara `equity` contra la equidad de inicio del día, porque mide la caída real de la cuenta.
 
 ## Valores iniciales a calibrar
 
@@ -182,6 +206,8 @@ No son compromisos de producto; son el punto de partida para el primer backtest.
 | `GridStepPips` | 22 |
 | `MaxSpreadPips` | 3 |
 
+En modo `ALL` se agregan `MaxAggregateLossPct` y `MaxAggregateVolume`. Para la comparación justa se fijan en 1000 % y 9 lotes para que no recorten (ver `docs/comparacion-justa.md`).
+
 ## Risks / Trade-offs
 
 - **Cambiar el gate altera los resultados vs MT4** → la paridad se mide sobre señales, no sobre PnL; las diferencias esperadas se documentan en el reporte.
@@ -189,7 +215,8 @@ No son compromisos de producto; son el punto de partida para el primer backtest.
 - **SL de canasta puede quedar dentro del stops level** → se clampea al mínimo permitido y, si eso rompe el presupuesto de riesgo, se rechaza la apertura y se registra.
 - **El SL compartido se reenvía en cada paso** → N modificaciones por paso; se acota con `MaxGridSteps` y se toleran fallos parciales sin bloquear.
 - **Estado del límite diario entre reinicios** → se persiste por cuenta y día del servidor; si falta, se reconstruye desde el historial.
-- **Una estrategia por gráfico reduce el marketing de "3 en 1"** → se ofrecen tres presets y tres instancias; el motor soporta N canastas para cuando las señales sean distintas.
+- **Una estrategia por instancia reduce el marketing de "3 en 1"** → se ofrecen tres presets y tres instancias; `Strategy=ALL` queda como modo opt-in para portafolio y comparación, con topes agregados.
+- **`ALL` triplica el margen y permite canastas opuestas** → es opt-in, requiere cuenta hedging y presupuesto agregado; el valor por defecto sigue siendo una estrategia.
 - **El cap corta la martingala antes de recuperar** → es el comportamiento buscado: la canasta cierra por SL en lugar de seguir agregando riesgo.
 
 ## Migration Plan
@@ -201,6 +228,7 @@ Fase 2  Scalper Pro + paridad de señales
 Fase 3  Caps de riesgo + limite diario + pruebas de rechazo
 Fase 4  Fibonacci Focus y TrendMaster sobre el mismo contrato
 Fase 5  Panel + harness + documentacion de operacion
+Fase 6  Modo portafolio Strategy=ALL + atribucion por estrategia
 ```
 
 Rollback: el EA nuevo es aditivo. Los `.mq4` de referencia no se tocan, así que el sistema anterior sigue disponible si una fase no converge.
@@ -208,5 +236,5 @@ Rollback: el EA nuevo es aditivo. Los `.mq4` de referencia no se tocan, así que
 ## Open Questions
 
 - ¿"Fibonacci Focus" debe implementar retrocesos reales antes del lanzamiento, o se mantiene la regla actual y se renombra?
-- ¿Se necesita un tope agregado a nivel de cuenta entre varios gráficos? Requiere un registro compartido fuera del alcance de v1.
+- ¿Se necesita un tope agregado a nivel de cuenta entre varios gráficos o instancias? Dentro de una instancia `ALL` el presupuesto agregado ya está especificado (D12); entre gráficos requiere un registro compartido fuera del alcance de v1.
 - ¿El EA debe restringirse a AUDCAD por defecto o aceptar cualquier símbolo con validación opcional?

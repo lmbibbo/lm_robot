@@ -8,12 +8,17 @@ Orquesta el ciclo del EA: cuándo evalúa señales, cuándo gestiona posiciones 
 
 ### Requirement: Señal por barra, gestión por tick
 
-La evaluación de señales DEBE ocurrir una sola vez por barra cerrada. La gestión de posiciones abiertas DEBE ocurrir en cada tick, independientemente de si la señal se evaluó o no.
+Cada estrategia activa DEBE evaluar su señal una sola vez por barra cerrada. La gestión de las canastas abiertas DEBE ocurrir en cada tick, independientemente de si la señal se evaluó o no.
 
 #### Scenario: Varios ticks dentro de la misma barra
 
 - **WHEN** llegan diez ticks dentro de la misma barra
-- **THEN** la señal se evalúa una vez y la gestión de la canasta se ejecuta en los diez ticks
+- **THEN** cada estrategia activa evalúa su señal una vez y la gestión de las canastas se ejecuta en los diez ticks
+
+#### Scenario: Modo portafolio
+
+- **WHEN** `Strategy=ALL` y llega una barra cerrada
+- **THEN** las tres señales se evalúan una vez y las tres canastas se gestionan en cada tick siguiente
 
 ### Requirement: Los guards solo bloquean entradas
 
@@ -42,14 +47,33 @@ Toda operación de envío o modificación DEBE tener un número máximo de inten
 - **WHEN** el broker rechaza una modificación de stop loss de forma persistente
 - **THEN** el sistema agota el límite de intentos, registra el error y continúa con el siguiente tick
 
-### Requirement: Una estrategia por gráfico
+### Requirement: Aislamiento entre estrategias
 
-El sistema DEBE operar una sola estrategia por instancia, seleccionada por un parámetro de entrada. Un valor inválido DEBE impedir la inicialización.
+En modo `ALL`, cada estrategia DEBE gestionar únicamente las posiciones de su magic. Un rechazo o error de una estrategia NO DEBE impedir la evaluación ni la gestión de las otras.
+
+#### Scenario: Error en una estrategia
+
+- **WHEN** una estrategia agota sus reintentos al enviar una orden
+- **THEN** las otras dos siguen evaluando señales y gestionando sus canastas en el mismo tick
+
+### Requirement: Selección de estrategia por instancia
+
+El sistema DEBE operar una estrategia por instancia, o las tres en modo portafolio, según un parámetro de entrada (`SCALPER`, `FIBONACCI`, `TREND` o `ALL`). Un valor inválido DEBE impedir la inicialización.
 
 #### Scenario: Selección de estrategia
 
 - **WHEN** el operador elige Scalper Pro
 - **THEN** solo se evalúa esa señal y las otras dos no abren posiciones ni consumen presupuesto
+
+#### Scenario: Modo portafolio
+
+- **WHEN** el operador elige `ALL`
+- **THEN** las tres estrategias evalúan su señal, cada una abre su propia canasta con un magic distinto y ninguna queda excluida por la selección
+
+#### Scenario: Valor inválido
+
+- **WHEN** el parámetro de entrada no es uno de los cuatro valores admitidos
+- **THEN** la inicialización falla y el EA no envía órdenes
 
 ### Requirement: Validación previa de la orden
 
@@ -62,12 +86,17 @@ Antes de enviar una orden, el sistema DEBE normalizar el volumen al paso del sí
 
 ### Requirement: Panel de estado de canasta
 
-El panel DEBE mostrar la estrategia activa, la dirección de la canasta, el volumen total, el precio promedio ponderado, el próximo nivel de grid, el presupuesto de riesgo consumido y el resultado del día. El panel NO DEBE recalcular indicadores ni recrear objetos en cada tick.
+El panel DEBE mostrar, por estrategia activa, la dirección de la canasta, el volumen total, el precio promedio ponderado, el próximo nivel de grid, el presupuesto de riesgo consumido y el resultado del día. En modo `ALL` DEBE mostrar una fila por estrategia y una fila agregada. El panel NO DEBE recalcular indicadores ni recrear objetos en cada tick.
 
 #### Scenario: Actualización eficiente
 
 - **WHEN** no cambió ningún valor relevante del panel
 - **THEN** el panel no se redibuja
+
+#### Scenario: Panel en modo portafolio
+
+- **WHEN** `Strategy=ALL` y las tres estrategias tienen canastas abiertas
+- **THEN** el panel muestra tres filas, una por estrategia, y una fila con el agregado
 
 ### Requirement: Limpieza al desinicializar
 

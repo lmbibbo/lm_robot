@@ -34,19 +34,19 @@ Antes de abrir cualquier orden, el sistema DEBE calcular la pérdida proyectada 
 - **WHEN** la pérdida proyectada con el nuevo paso sigue dentro del presupuesto
 - **THEN** el paso se envía con el volumen calculado
 
-### Requirement: Topes de volumen
+### Requirement: Presupuesto agregado en modo portafolio
 
-El sistema DEBE aplicar tres topes independientes: volumen máximo por orden, volumen máximo por canasta y cantidad máxima de pasos de grid. Un tope alcanzado NO DEBE impedir cerrar, mover o reducir posiciones existentes.
+En modo `ALL`, antes de abrir cualquier orden el sistema DEBE comparar la pérdida proyectada de todas las canastas abiertas más la orden nueva contra un presupuesto agregado de instancia. Si lo supera, la orden NO DEBE enviarse. Los presupuestos por canasta siguen siendo independientes y el rechazo agregado NO DEBE impedir la gestión de las canastas existentes.
 
-#### Scenario: Tope de pasos alcanzado
+#### Scenario: Apertura rechazada por el agregado
 
-- **WHEN** la canasta ya tiene la cantidad máxima de pasos configurada
-- **THEN** no se habilitan pasos nuevos aunque el precio alcance la distancia de grid
+- **WHEN** la pérdida proyectada de las tres canastas más la orden nueva supera `MaxAggregateLossPct`
+- **THEN** la orden no se envía y las canastas abiertas conservan su gestión
 
-#### Scenario: Tope de volumen por orden
+#### Scenario: Gestión con el agregado agotado
 
-- **WHEN** el volumen calculado para un paso supera el máximo por orden
-- **THEN** se usa el máximo por orden o se rechaza el paso si eso excede el presupuesto de canasta
+- **WHEN** el presupuesto agregado está agotado y una canasta alcanza su take profit
+- **THEN** el cierre se ejecuta igual y solo se bloquean las aperturas
 
 ### Requirement: Stop loss obligatorio
 
@@ -62,9 +62,39 @@ Ninguna orden DEBE enviarse sin un stop loss válido y distinto de cero. Si el s
 - **WHEN** el margen libre no alcanza para el volumen solicitado
 - **THEN** la orden no se envía y la canasta no se modifica
 
+### Requirement: Los límites no interrumpen la gestión
+
+Cuando un límite de riesgo y una acción de gestión coinciden en el mismo tick, el sistema DEBE ejecutar primero la gestión de las posiciones abiertas: cierre por stop, take profit, trailing o reducción de exposición.
+
+#### Scenario: Guard y cierre simultáneos
+
+- **WHEN** el límite diario está activo y una canasta alcanza su stop loss de canasta
+- **THEN** el cierre se ejecuta igual y solo se bloquean las aperturas
+
+## MODIFIED Requirements
+
+### Requirement: Topes de volumen
+
+El sistema DEBE aplicar topes independientes: volumen máximo por orden, volumen máximo por canasta y cantidad máxima de pasos de grid. En modo `ALL` DEBE aplicar además un tope de volumen concurrente agregado. Un tope alcanzado NO DEBE impedir cerrar, mover o reducir posiciones existentes.
+
+#### Scenario: Tope de pasos alcanzado
+
+- **WHEN** la canasta ya tiene la cantidad máxima de pasos configurada
+- **THEN** no se habilitan pasos nuevos aunque el precio alcance la distancia de grid
+
+#### Scenario: Tope de volumen por orden
+
+- **WHEN** el volumen calculado para un paso supera el máximo por orden
+- **THEN** se usa el máximo por orden o se rechaza el paso si eso excede el presupuesto de canasta
+
+#### Scenario: Tope agregado en modo portafolio
+
+- **WHEN** la suma del volumen de las tres canastas más el paso nuevo supera `MaxAggregateVolume`
+- **THEN** el paso no se envía y las canastas existentes siguen gestionándose
+
 ### Requirement: Límite de pérdida diaria
 
-El sistema DEBE comparar la equidad actual con la equidad registrada al inicio del día del servidor. Si la caída supera el porcentaje configurado, DEBE bloquear nuevas entradas hasta el inicio del día siguiente. El valor de referencia DEBE sobrevivir a un reinicio del terminal.
+El sistema DEBE comparar la equidad actual con la equidad registrada al inicio del día del servidor. Si la caída supera el porcentaje configurado, DEBE bloquear nuevas entradas hasta el inicio del día siguiente. El valor de referencia DEBE sobrevivir a un reinicio del terminal. En modo `ALL` el límite es de la instancia completa, no por estrategia.
 
 #### Scenario: Límite diario alcanzado
 
@@ -76,11 +106,7 @@ El sistema DEBE comparar la equidad actual con la equidad registrada al inicio d
 - **WHEN** el terminal se reinicia después de alcanzar el límite diario, el mismo día del servidor
 - **THEN** el bloqueo de entradas se mantiene
 
-### Requirement: Los límites no interrumpen la gestión
+#### Scenario: Límite diario en modo portafolio
 
-Cuando un límite de riesgo y una acción de gestión coinciden en el mismo tick, el sistema DEBE ejecutar primero la gestión de las posiciones abiertas: cierre por stop, take profit, trailing o reducción de exposición.
-
-#### Scenario: Guard y cierre simultáneos
-
-- **WHEN** el límite diario está activo y una canasta alcanza su stop loss de canasta
-- **THEN** el cierre se ejecuta igual y solo se bloquean las aperturas
+- **WHEN** `Strategy=ALL` alcanza el límite diario de la cuenta
+- **THEN** las tres estrategias dejan de abrir y las canastas abiertas siguen gestionándose

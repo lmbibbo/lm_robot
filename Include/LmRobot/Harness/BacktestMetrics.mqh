@@ -35,6 +35,21 @@ struct BacktestSummary
    int    maxGridStepsLimit;
    double maxBasketLossPct;
    bool   limitsRespected;
+   bool   portfolio;
+   int    strategyCount;
+   string strategyNames[LM_MAX_ACTIVE_STRATEGIES];
+   long   strategyMagics[LM_MAX_ACTIVE_STRATEGIES];
+   double strategyNet[LM_MAX_ACTIVE_STRATEGIES];
+   double strategyMaxDrawdown[LM_MAX_ACTIVE_STRATEGIES];
+   double strategyMaxVolume[LM_MAX_ACTIVE_STRATEGIES];
+   double strategyMaxProjectedLossPct[LM_MAX_ACTIVE_STRATEGIES];
+   int    strategyOrders[LM_MAX_ACTIVE_STRATEGIES];
+   double portfolioNet;
+   double maxAggregateVolume;
+   double maxAggregateProjectedLossPct;
+   double aggregateVolumeLimit;
+   double aggregateLossPctLimit;
+   bool   aggregateRespected;
   };
 
 //+------------------------------------------------------------------+
@@ -58,6 +73,91 @@ string LmStrategySlug(const ENUM_LM_STRATEGY strategy)
    string name = LmStrategyName(strategy);
    StringReplace(name, " ", "_");
    return(name);
+  }
+
+//+------------------------------------------------------------------+
+//| Net realizado de un magic segun el historial de deals.           |
+//| Suma profit + swap + commission de los deals de cierre.          |
+//| Los cierres forzados al final del test llegan con magic 0; en    |
+//| ese caso el magic se recupera del deal de apertura de la misma   |
+//| posicion (DEAL_POSITION_ID).                                     |
+//+------------------------------------------------------------------+
+double LmHistoryNetByMagic(const long magic)
+  {
+   if(!HistorySelect(0, TimeCurrent() + 86400))
+      return(0.0);
+
+   int total = HistoryDealsTotal();
+
+   //--- Primera pasada: magic de cada posicion segun su deal de entrada.
+   ulong positionIds[];
+   long  positionMagics[];
+   ArrayResize(positionIds, 0);
+   ArrayResize(positionMagics, 0);
+
+   for(int i = 0; i < total; i++)
+     {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      ENUM_DEAL_ENTRY entry =
+         (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_IN)
+         continue;
+
+      long positionId = (long)HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+      if(positionId == 0)
+         continue;
+
+      int index = ArraySize(positionIds);
+      ArrayResize(positionIds, index + 1);
+      ArrayResize(positionMagics, index + 1);
+      positionIds[index]    = (ulong)positionId;
+      positionMagics[index] = (long)HistoryDealGetInteger(ticket, DEAL_MAGIC);
+     }
+
+   //--- Segunda pasada: neto de los deals de cierre del magic pedido.
+   double net = 0.0;
+
+   for(int i = 0; i < total; i++)
+     {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      ENUM_DEAL_ENTRY entry =
+         (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+
+      //--- El deal de apertura no tiene resultado economico.
+      if(entry == DEAL_ENTRY_IN)
+         continue;
+
+      //--- Depositos y retiros no pertenecen a ninguna estrategia.
+      if(HistoryDealGetString(ticket, DEAL_SYMBOL) == "")
+         continue;
+
+      long dealMagic = (long)HistoryDealGetInteger(ticket, DEAL_MAGIC);
+      if(dealMagic == 0)
+        {
+         long positionId = (long)HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+         for(int j = 0; j < ArraySize(positionIds); j++)
+            if((long)positionIds[j] == positionId)
+              {
+               dealMagic = positionMagics[j];
+               break;
+              }
+        }
+
+      if(dealMagic != magic)
+         continue;
+
+      net += HistoryDealGetDouble(ticket, DEAL_PROFIT);
+      net += HistoryDealGetDouble(ticket, DEAL_SWAP);
+      net += HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+     }
+
+   return(net);
   }
 
 //+------------------------------------------------------------------+
@@ -270,12 +370,50 @@ public:
       summary.maxGridStepsLimit  = config.risk.maxGridSteps;
       summary.maxBasketLossPct   = config.risk.maxBasketLossPct;
 
+      //--- Atribucion por estrategia (modo portafolio ALL).
+      summary.strategyCount = MathMin(MathMax(result.strategyCount, 0),
+                                     LM_MAX_ACTIVE_STRATEGIES);
+      summary.portfolio     = (summary.strategyCount > 1);
+      summary.portfolioNet  = 0.0;
+
+      for(int i = 0; i < LM_MAX_ACTIVE_STRATEGIES; i++)
+        {
+         summary.strategyNames[i]   = "";
+         summary.strategyMagics[i]  = 0;
+         summary.strategyNet[i]     = 0.0;
+         summary.strategyMaxDrawdown[i] = 0.0;
+         summary.strategyMaxVolume[i] = 0.0;
+         summary.strategyMaxProjectedLossPct[i] = 0.0;
+         summary.strategyOrders[i]  = 0;
+        }
+
+      for(int i = 0; i < summary.strategyCount; i++)
+        {
+         summary.strategyNames[i]  = result.strategyNames[i];
+         summary.strategyMagics[i] = result.strategyMagics[i];
+         summary.strategyOrders[i] = result.strategyOrders[i];
+         summary.strategyMaxVolume[i] = result.strategyMaxVolume[i];
+         summary.strategyMaxProjectedLossPct[i] = result.strategyMaxProjectedLossPct[i];
+         summary.strategyMaxDrawdown[i] = result.strategyMaxDrawdown[i];
+         summary.strategyNet[i] = LmHistoryNetByMagic(result.strategyMagics[i]);
+         summary.portfolioNet += summary.strategyNet[i];
+        }
+
+      summary.maxAggregateVolume = result.maxAggregateVolume;
+      summary.maxAggregateProjectedLossPct = result.maxAggregateProjectedLossPct;
+      summary.aggregateVolumeLimit = config.risk.maxAggregateVolume;
+      summary.aggregateLossPctLimit = config.risk.maxAggregateLossPct;
+      summary.aggregateRespected =
+         result.maxAggregateVolume <= config.risk.maxAggregateVolume + 1e-9 &&
+         result.maxAggregateProjectedLossPct <= config.risk.maxAggregateLossPct + 1e-6;
+
       double eps = 1e-9;
       summary.limitsRespected =
          result.maxOrderVolume <= config.risk.maxLotPerOrder + eps &&
          result.maxBasketVolume <= config.risk.maxVolumePerStrategy + eps &&
          result.maxGridSteps <= config.risk.maxGridSteps &&
-         result.maxProjectedLossPct <= config.risk.maxBasketLossPct + 1e-6;
+         result.maxProjectedLossPct <= config.risk.maxBasketLossPct + 1e-6 &&
+         (!summary.portfolio || summary.aggregateRespected);
 
       return(summary);
      }
@@ -329,6 +467,26 @@ public:
       FileWrite(handle, "max_grid_steps_limit", IntegerToString(summary.maxGridStepsLimit));
       FileWrite(handle, "max_basket_loss_pct_limit", DoubleToString(summary.maxBasketLossPct, 2));
       FileWrite(handle, "limits_respected", summary.limitsRespected ? "SI" : "NO");
+      FileWrite(handle, "portfolio_mode", summary.portfolio ? "SI" : "NO");
+      FileWrite(handle, "strategy_count", IntegerToString(summary.strategyCount));
+      FileWrite(handle, "portfolio_net", DoubleToString(summary.portfolioNet, 2));
+      FileWrite(handle, "max_aggregate_volume", DoubleToString(summary.maxAggregateVolume, 2));
+      FileWrite(handle, "max_aggregate_loss_pct", DoubleToString(summary.maxAggregateProjectedLossPct, 4));
+      FileWrite(handle, "max_aggregate_volume_limit", DoubleToString(summary.aggregateVolumeLimit, 2));
+      FileWrite(handle, "max_aggregate_loss_pct_limit", DoubleToString(summary.aggregateLossPctLimit, 2));
+      FileWrite(handle, "aggregate_respected", summary.aggregateRespected ? "SI" : "NO");
+
+      for(int i = 0; i < summary.strategyCount; i++)
+        {
+         string prefix = "attr_" + IntegerToString(i) + "_";
+         FileWrite(handle, prefix + "strategy", summary.strategyNames[i]);
+         FileWrite(handle, prefix + "magic", IntegerToString((int)summary.strategyMagics[i]));
+         FileWrite(handle, prefix + "net", DoubleToString(summary.strategyNet[i], 2));
+         FileWrite(handle, prefix + "max_drawdown", DoubleToString(summary.strategyMaxDrawdown[i], 2));
+         FileWrite(handle, prefix + "max_volume", DoubleToString(summary.strategyMaxVolume[i], 2));
+         FileWrite(handle, prefix + "max_projected_loss_pct", DoubleToString(summary.strategyMaxProjectedLossPct[i], 4));
+         FileWrite(handle, prefix + "orders", IntegerToString(summary.strategyOrders[i]));
+        }
 
       FileClose(handle);
       return(true);
@@ -348,6 +506,27 @@ public:
                   DoubleToString(summary.maxDrawdownPct, 4),
                   summary.dailyLimitHits, summary.dailyLimitDays,
                   summary.limitsRespected ? "SI" : "NO", filename);
+
+      if(!summary.portfolio)
+         return;
+
+      PrintFormat("LM_BACKTEST PORTFOLIO net=%s max_agg_volume=%s max_agg_loss_pct=%s " +
+                  "agg_ok=%s strategies=%d",
+                  DoubleToString(summary.portfolioNet, 2),
+                  DoubleToString(summary.maxAggregateVolume, 2),
+                  DoubleToString(summary.maxAggregateProjectedLossPct, 4),
+                  summary.aggregateRespected ? "SI" : "NO",
+                  summary.strategyCount);
+
+      for(int i = 0; i < summary.strategyCount; i++)
+         PrintFormat("LM_BACKTEST ATTR strategy=%s magic=%I64d net=%s dd=%s " +
+                     "max_volume=%s loss_pct=%s orders=%d",
+                     summary.strategyNames[i], summary.strategyMagics[i],
+                     DoubleToString(summary.strategyNet[i], 2),
+                     DoubleToString(summary.strategyMaxDrawdown[i], 2),
+                     DoubleToString(summary.strategyMaxVolume[i], 2),
+                     DoubleToString(summary.strategyMaxProjectedLossPct[i], 4),
+                     summary.strategyOrders[i]);
      }
   };
 
