@@ -12,33 +12,34 @@
 #include "../Include/LmRobot/UI/Dashboard.mqh"
 
 //--- Estrategia y ejecucion
-input ENUM_LM_STRATEGY Strategy = LM_STRATEGY_SCALPER_PRO; // Estrategia activa
-input int             MagicNumber = 20261103;              // Magic number de la instancia
-input int             MaxAttempts = 3;                     // Intentos maximos por orden
-input int             RetryDelayMs = 250;                  // Espera entre intentos (ms)
-input int             DeadlineMs = 3000;                   // Deadline total por operacion (ms)
+//--- Defaults = configuracion R11 (P-NS-ALL): portafolio ALL, AUDCAD H1.
+input ENUM_LM_STRATEGY Strategy = LM_STRATEGY_ALL; // Estrategia activa
+input int             MagicNumber = 202611030;     // Magic number de la instancia
+input int             MaxAttempts = 3;             // Intentos maximos por orden
+input int             RetryDelayMs = 250;          // Espera entre intentos (ms)
+input int             DeadlineMs = 3000;           // Deadline total por operacion (ms)
 
 //--- Contexto de mercado
 input ENUM_TIMEFRAMES AtrTimeframe = PERIOD_CURRENT; // Timeframe del ATR
 input int             AtrPeriod    = 14;             // Periodo del ATR
-input double          MaxSpreadPips = 3.0;           // Spread maximo para entradas (pips)
-input double          MaxAtrPips    = 30.0;          // ATR maximo para entradas (pips)
+input double          MaxSpreadPips = 100.0;         // Spread maximo para entradas (pips)
+input double          MaxAtrPips    = 15.0;          // ATR maximo para entradas (pips)
 
 //--- Riesgo
-input double RiskPct               = 0.5;  // Riesgo de la primera orden (% del balance)
-input double MaxBasketLossPct      = 2.0;  // Perdida maxima proyectada de la canasta (%)
-input double DailyLossLimitPct     = 4.0;  // Caida diaria maxima de equidad (%)
-input int    MaxGridSteps          = 4;    // Pasos de grid maximos
-input double LotMultiplier         = 1.5;  // Multiplicador de volumen entre pasos
-input double MaxLotPerOrder        = 0.10; // Volumen maximo por orden
-input double MaxVolumePerStrategy  = 0.30; // Volumen maximo de la canasta
-input double SlPips                = 40.0; // Distancia del SL de canasta (pips)
-input double TpPips                = 8.0;  // Distancia del TP de canasta (pips)
-input double GridStepPips          = 22.0; // Distancia para el siguiente paso (pips)
+input double RiskPct               = 4.0;    // Riesgo de la primera orden (% del balance)
+input double MaxBasketLossPct      = 1000.0; // Perdida maxima proyectada de la canasta (%)
+input double DailyLossLimitPct     = 1000.0; // Caida diaria maxima de equidad (%)
+input int    MaxGridSteps          = 19;     // Pasos de grid maximos
+input double LotMultiplier         = 1.667;  // Multiplicador de volumen entre pasos
+input double MaxLotPerOrder        = 9.0;    // Volumen maximo por orden
+input double MaxVolumePerStrategy  = 9.0;    // Volumen maximo de la canasta
+input double SlPips                = 1000.0; // Distancia del SL de canasta (pips)
+input double TpPips                = 8.0;    // Distancia del TP de canasta (pips)
+input double GridStepPips          = 22.0;   // Distancia para el siguiente paso (pips)
 
 //--- Presupuesto agregado de la instancia (modo Strategy=ALL)
-input double MaxAggregateLossPct   = 6.0;  // Perdida agregada de la instancia (%)
-input double MaxAggregateVolume    = 0.90; // Volumen concurrente agregado (lotes)
+input double MaxAggregateLossPct   = 1000.0; // Perdida agregada de la instancia (%)
+input double MaxAggregateVolume    = 9.0;    // Volumen concurrente agregado (lotes)
 
 //--- Sesion
 input bool UseSessionFilter = false; // Habilita el filtro de sesion
