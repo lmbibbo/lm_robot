@@ -24,16 +24,22 @@ input ENUM_TIMEFRAMES AtrTimeframe = PERIOD_CURRENT; // Timeframe del ATR
 input int             AtrPeriod    = 14;             // Periodo del ATR
 input double          MaxSpreadPips = 100.0;         // Spread maximo para entradas (pips)
 input double          MaxAtrPips    = 15.0;          // ATR maximo para entradas (pips)
+input double          AtrSlMultiplier = 1.667;       // Multiplicador de ATR para el SL
+input int             AtrLookback = 50;              // Barras para la media del ATR
+input double          VolFactorMin = 0.3;            // Factor minimo de volatilidad
+input double          VolFactorMax = 2.0;            // Factor maximo de volatilidad
 
 //--- Riesgo
-input double RiskPct               = 4.0;    // Riesgo de la primera orden (% del balance)
+input ENUM_LM_RISK_MODE RiskMode  = LM_RISK_AUTO; // Modalidad inicial del riesgo
+input double AutoRiskMaxPct        = 6.0;    // Tope del riesgo automatico (%)
+input double RiskPct               = 4.0;    // Riesgo base / manual (% del balance)
 input double MaxBasketLossPct      = 1000.0; // Perdida maxima proyectada de la canasta (%)
 input double DailyLossLimitPct     = 1000.0; // Caida diaria maxima de equidad (%)
 input int    MaxGridSteps          = 19;     // Pasos de grid maximos
 input double LotMultiplier         = 1.667;  // Multiplicador de volumen entre pasos
 input double MaxLotPerOrder        = 9.0;    // Volumen maximo por orden
 input double MaxVolumePerStrategy  = 9.0;    // Volumen maximo de la canasta
-input double SlPips                = 1000.0; // Distancia del SL de canasta (pips)
+input double SlPips                = 1000.0; // SL minimo de la canasta (pips)
 input double TpPips                = 8.0;    // Distancia del TP de canasta (pips)
 input double GridStepPips          = 22.0;   // Distancia para el siguiente paso (pips)
 
@@ -99,11 +105,27 @@ int OnInit()
       return(INIT_FAILED);
      }
 
+   if(!MathIsValidNumber(AutoRiskMaxPct) ||
+      AutoRiskMaxPct < 0.5 || AutoRiskMaxPct > 10.0)
+     {
+      PrintFormat("LmRobot: AutoRiskMaxPct invalido (%.2f); rango valido 0.5-10.0",
+                  AutoRiskMaxPct);
+      return(INIT_FAILED);
+     }
+
+   if(RiskMode != LM_RISK_MANUAL && RiskMode != LM_RISK_AUTO)
+     {
+      PrintFormat("LmRobot: RiskMode invalido (%d)", (int)RiskMode);
+      return(INIT_FAILED);
+     }
+
    if(RiskPct <= 0.0 || MaxBasketLossPct <= 0.0 || DailyLossLimitPct <= 0.0 ||
       MaxGridSteps < 0 || LotMultiplier <= 0.0 || MaxLotPerOrder <= 0.0 ||
       MaxVolumePerStrategy <= 0.0 || SlPips <= 0.0 || TpPips <= 0.0 ||
       GridStepPips <= 0.0 || MaxSpreadPips <= 0.0 || MaxAtrPips <= 0.0 ||
-      MaxAggregateLossPct <= 0.0 || MaxAggregateVolume <= 0.0)
+      MaxAggregateLossPct <= 0.0 || MaxAggregateVolume <= 0.0 ||
+      AtrSlMultiplier <= 0.0 || AtrLookback < 1 ||
+      VolFactorMin <= 0.0 || VolFactorMax < VolFactorMin)
      {
       Print("LmRobot: parametros de riesgo invalidos");
       return(INIT_FAILED);
@@ -111,6 +133,8 @@ int OnInit()
 
    //--- 4. Contexto de mercado: handles RSI/ATR una sola vez.
    ENUM_TIMEFRAMES atrTimeframe = (AtrTimeframe == PERIOD_CURRENT ? _Period : AtrTimeframe);
+
+   g_market.SetAtrLookback(AtrLookback);
 
    if(!g_market.Init(_Symbol, _Period, LM_RSI_PERIOD, atrTimeframe, AtrPeriod,
                      MaxSpreadPips, MaxAtrPips))
@@ -165,6 +189,9 @@ int OnInit()
    config.session  = session;
 
    config.risk.riskPct             = RiskPct;
+   config.risk.riskMode            = RiskMode;
+   config.risk.riskBasePct         = RiskPct;
+   config.risk.autoRiskMaxPct      = AutoRiskMaxPct;
    config.risk.maxBasketLossPct    = MaxBasketLossPct;
    config.risk.dailyLossLimitPct   = DailyLossLimitPct;
    config.risk.maxGridSteps        = MaxGridSteps;
@@ -177,6 +204,10 @@ int OnInit()
    config.risk.maxSpreadPips       = MaxSpreadPips;
    config.risk.maxAggregateLossPct = MaxAggregateLossPct;
    config.risk.maxAggregateVolume  = MaxAggregateVolume;
+   config.risk.atrSlMultiplier     = AtrSlMultiplier;
+   config.risk.atrLookback         = AtrLookback;
+   config.risk.volFactorMin        = VolFactorMin;
+   config.risk.volFactorMax        = VolFactorMax;
 
    g_bars.Init(_Symbol, _Period, g_market.RsiHandle());
    g_baskets.Init(_Symbol);
@@ -217,6 +248,34 @@ void OnDeinit(const int reason)
   }
 
 //+------------------------------------------------------------------+
+//| Refresca el panel con el estado actual del runtime.              |
+//+------------------------------------------------------------------+
+void RefreshPanel()
+  {
+   //--- El panel solo se redibuja cuando cambio un campo relevante.
+   RuntimeConfig config = g_runtime.Config();
+   StrategyView views[LM_MAX_ACTIVE_STRATEGIES];
+   int viewCount = g_runtime.StrategyCount();
+
+   for(int i = 0; i < viewCount; i++)
+     {
+      long magic = 0;
+      ENUM_LM_STRATEGY strategy = LM_STRATEGY_ALL;
+      g_runtime.StrategyAt(i, strategy, views[i].basket, magic);
+      views[i].strategy = strategy;
+     }
+
+   DashboardState panel = LmBuildPortfolioDashboardState(views, viewCount,
+                                                          config.risk,
+                                                          g_runtime.DailyState(),
+                                                          g_market.Instrument(),
+                                                          AccountInfoDouble(ACCOUNT_BALANCE),
+                                                          AccountInfoDouble(ACCOUNT_EQUITY));
+
+   g_dashboard.Update(panel, _Symbol);
+  }
+
+//+------------------------------------------------------------------+
 //| Expert tick                                                      |
 //+------------------------------------------------------------------+
 void OnTick()
@@ -235,27 +294,45 @@ void OnTick()
    g_metrics.ObserveEquity(serverTime, equity);
    g_metrics.ObserveDaily(g_runtime.DailyState());
 
-   //--- El panel solo se redibuja cuando cambio un campo relevante.
-   RuntimeConfig config = g_runtime.Config();
-   StrategyView views[LM_MAX_ACTIVE_STRATEGIES];
-   int viewCount = g_runtime.StrategyCount();
+   RefreshPanel();
+  }
 
-   for(int i = 0; i < viewCount; i++)
+//+------------------------------------------------------------------+
+//| Ajuste del riesgo vivo desde los botones del panel.              |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam,
+                  const double &dparam, const string &sparam)
+  {
+   if(id != CHARTEVENT_OBJECT_CLICK)
+      return;
+
+   if(LmRiskModeButton(sparam))
      {
-      long magic = 0;
-      ENUM_LM_STRATEGY strategy = LM_STRATEGY_SCALPER_PRO;
-      g_runtime.StrategyAt(i, strategy, views[i].basket, magic);
-      views[i].strategy = strategy;
+      ENUM_LM_RISK_MODE current = g_runtime.Config().risk.riskMode;
+      g_runtime.SetRiskMode(current == LM_RISK_MANUAL ? LM_RISK_AUTO
+                                                      : LM_RISK_MANUAL);
+      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+      RefreshPanel();
+      return;
      }
 
-   DashboardState panel = LmBuildPortfolioDashboardState(views, viewCount,
-                                                          config.risk,
-                                                          g_runtime.DailyState(),
-                                                          g_market.Instrument(),
-                                                          balance,
-                                                          equity);
+   int direction = LmRiskButtonDirection(sparam);
+   if(direction == 0)
+      return;
 
-   g_dashboard.Update(panel, _Symbol);
+   if(g_runtime.Config().risk.riskMode == LM_RISK_AUTO)
+     {
+      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+      return;
+     }
+
+   double current = g_runtime.Config().risk.riskPct;
+   double next    = LmNextRiskPct(current, direction);
+   if(next != current)
+      g_runtime.SetRiskPct(next);
+
+   ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+   RefreshPanel();
   }
 
 //+------------------------------------------------------------------+

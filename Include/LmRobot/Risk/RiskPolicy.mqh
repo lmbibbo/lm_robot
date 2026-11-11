@@ -6,10 +6,22 @@
 #define LMROBOT_RISK_RISKPOLICY_MQH
 
 //+------------------------------------------------------------------+
+//| Modalidad del riesgo vivo.                                       |
+//+------------------------------------------------------------------+
+enum ENUM_LM_RISK_MODE
+  {
+   LM_RISK_MANUAL = 0,
+   LM_RISK_AUTO   = 1
+  };
+
+//+------------------------------------------------------------------+
 //| Parametros de riesgo. Valores iniciales de la tabla del design.  |
 //+------------------------------------------------------------------+
 struct RiskConfig
   {
+   ENUM_LM_RISK_MODE riskMode;      // modalidad vigente; el input es solo el valor inicial
+   double   riskBasePct;            // base del calculo automatico; se captura al entrar en Auto
+   double   autoRiskMaxPct;         // tope maximo del riesgo automatico (input)
    double   riskPct;
    double   maxBasketLossPct;
    double   dailyLossLimitPct;
@@ -23,6 +35,11 @@ struct RiskConfig
    double   maxSpreadPips;
    double   maxAggregateLossPct;
    double   maxAggregateVolume;
+   //--- Volatilidad: el SL crece con el ATR y el lote se ajusta al regimen.
+   double   atrSlMultiplier;
+   int      atrLookback;
+   double   volFactorMin;
+   double   volFactorMax;
   };
 
 //+------------------------------------------------------------------+
@@ -40,6 +57,7 @@ struct RiskStepPlan
    ENUM_RISK_DECISION decision;
    double             volume;
    double             projectedLoss;
+   double             slPips;
    string             reason;
   };
 
@@ -50,7 +68,10 @@ RiskConfig LmDefaultRiskConfig()
   {
    RiskConfig config;
 
+   config.riskMode            = LM_RISK_AUTO;
    config.riskPct             = 0.5;
+   config.riskBasePct         = config.riskPct;
+   config.autoRiskMaxPct      = 6.0;
    config.maxBasketLossPct    = 2.0;
    config.dailyLossLimitPct   = 4.0;
    config.maxGridSteps        = 4;
@@ -62,12 +83,85 @@ RiskConfig LmDefaultRiskConfig()
    config.gridStepPips        = 22.0;
    config.maxSpreadPips       = 3.0;
 
+   //--- SL y lote proporcionales al ATR (paridad con CodigoRefactorizado).
+   config.atrSlMultiplier     = 1.667;
+   config.atrLookback         = 50;
+   config.volFactorMin        = 0.3;
+   config.volFactorMax        = 2.0;
+
    //--- Modo portafolio (ALL): tres veces el tope por canasta.
    //--- La comparacion justa los sube a 1000 % y 9 lotes.
    config.maxAggregateLossPct = 6.0;
    config.maxAggregateVolume  = 0.90;
 
    return(config);
+  }
+
+//+------------------------------------------------------------------+
+//| Distancia de SL en pips derivada del ATR.                        |
+//| SlPips actua como piso: el ATR solo puede ampliar la distancia.  |
+//+------------------------------------------------------------------+
+double LmEffectiveSlPips(const RiskConfig &config, const double atrPips)
+  {
+   if(atrPips <= 0.0 || config.atrSlMultiplier <= 0.0)
+      return(config.slPips);
+
+   return(MathMax(config.slPips, atrPips * config.atrSlMultiplier));
+  }
+
+//+------------------------------------------------------------------+
+//| Factor de volatilidad: ATR medio / ATR actual, acotado.          |
+//| Si baja la volatilidad el lote sube (hasta volFactorMax); si     |
+//| sube, el lote baja (hasta volFactorMin).                         |
+//+------------------------------------------------------------------+
+double LmVolatilityFactor(const double atrPips, const double avgAtrPips,
+                          const double minFactor, const double maxFactor)
+  {
+   if(atrPips <= 0.0 || avgAtrPips <= 0.0)
+      return(1.0);
+
+   double lower = (minFactor > 0.0 ? minFactor : 0.0);
+   double upper = (maxFactor > 0.0 ? maxFactor : 1.0);
+
+   if(upper < lower)
+      upper = lower;
+
+   double factor = avgAtrPips / atrPips;
+   return(MathMin(MathMax(factor, lower), upper));
+  }
+
+//+------------------------------------------------------------------+
+//| Riesgo automatico derivado de la volatilidad relativa.           |
+//| La base no se recompone: el resultado se acota al rango operable |
+//| 0.5 - tope configurado (saneado a 0.5-10) y se redondea a 2      |
+//| decimales. Sin lectura valida de ATR el factor es 1.0.           |
+//+------------------------------------------------------------------+
+double LmAutoRiskPct(const double basePct,
+                     const double atrPips,
+                     const double avgAtrPips,
+                     const double minFactor,
+                     const double maxFactor,
+                     const double maxRiskPct)
+  {
+   double cap = maxRiskPct;
+   if(!MathIsValidNumber(cap))
+      cap = 6.0;
+
+   if(cap < 0.5)
+      cap = 0.5;
+   else if(cap > 10.0)
+      cap = 10.0;
+
+   double base = (MathIsValidNumber(basePct) ? basePct : 0.5);
+   double factor = LmVolatilityFactor(atrPips, avgAtrPips, minFactor, maxFactor);
+   double risk = base * factor;
+
+   if(risk < 0.5)
+      risk = 0.5;
+   else if(risk > cap)
+      risk = cap;
+
+   return(NormalizeDouble(MathRound(risk * 100.0) / 100.0, 2));
   }
 
 //+------------------------------------------------------------------+
@@ -84,6 +178,9 @@ double LmFloorVolume(const double volume, const double step)
 //+------------------------------------------------------------------+
 //| Lote inicial por riesgo, acotado al minimo y maximo del broker.  |
 //| Se redondea hacia abajo para no superar el riesgo configurado.   |
+//| El lote es proporcional al balance y al riesgo, e inversamente   |
+//| proporcional al SL (que puede venir del ATR). volFactor aplica   |
+//| el ajuste por volatilidad relativa.                              |
 //+------------------------------------------------------------------+
 double LmInitialLot(const double balance,
                     const double riskPct,
@@ -91,7 +188,8 @@ double LmInitialLot(const double balance,
                     const double pipValuePerLot,
                     const double volumeStep,
                     const double volumeMin,
-                    const double volumeMax)
+                    const double volumeMax,
+                    const double volFactor = 1.0)
   {
    if(balance <= 0.0 || riskPct <= 0.0 || slPips <= 0.0 || pipValuePerLot <= 0.0)
       return(0.0);
@@ -99,7 +197,8 @@ double LmInitialLot(const double balance,
    if(volumeStep <= 0.0 || volumeMin <= 0.0 || volumeMax < volumeMin)
       return(0.0);
 
-   double rawLot = (riskPct / 100.0 * balance) / (slPips * pipValuePerLot);
+   double factor = (volFactor > 0.0 ? volFactor : 1.0);
+   double rawLot = (riskPct / 100.0 * balance) / (slPips * pipValuePerLot) * factor;
    double maxValid = LmFloorVolume(volumeMax, volumeStep);
    double lot      = LmFloorVolume(rawLot, volumeStep);
 
@@ -225,6 +324,7 @@ bool LmFitsAggregateVolume(const double totalVolume,
 
 //+------------------------------------------------------------------+
 //| Planifica la primera orden y valida su presupuesto.              |
+//| El SL y el lote se derivan del ATR cuando hay lectura valida.    |
 //+------------------------------------------------------------------+
 bool LmPlanInitialOrder(const RiskConfig &config,
                         const double balance,
@@ -232,15 +332,23 @@ bool LmPlanInitialOrder(const RiskConfig &config,
                         const double volumeStep,
                         const double volumeMin,
                         const double volumeMax,
-                        RiskStepPlan &plan)
+                        RiskStepPlan &plan,
+                        const double atrPips = 0.0,
+                        const double avgAtrPips = 0.0)
   {
    plan.decision      = RISK_DECISION_REJECT;
    plan.volume        = 0.0;
    plan.projectedLoss = 0.0;
+   plan.slPips        = config.slPips;
    plan.reason        = "";
 
-   double volume = LmInitialLot(balance, config.riskPct, config.slPips,
-                                pipValuePerLot, volumeStep, volumeMin, volumeMax);
+   double effectiveSl = LmEffectiveSlPips(config, atrPips);
+   double volFactor   = LmVolatilityFactor(atrPips, avgAtrPips,
+                                           config.volFactorMin, config.volFactorMax);
+
+   double volume = LmInitialLot(balance, config.riskPct, effectiveSl,
+                                pipValuePerLot, volumeStep, volumeMin, volumeMax,
+                                volFactor);
    if(volume <= 0.0)
      {
       plan.reason = "no se pudo calcular el lote inicial";
@@ -257,7 +365,7 @@ bool LmPlanInitialOrder(const RiskConfig &config,
       return(false);
      }
 
-   double projected = LmProjectedLoss(volume, config.slPips, pipValuePerLot);
+   double projected = LmProjectedLoss(volume, effectiveSl, pipValuePerLot);
    plan.projectedLoss = projected;
 
    if(!LmFitsBasketBudget(projected, balance, config.maxBasketLossPct))
@@ -267,12 +375,14 @@ bool LmPlanInitialOrder(const RiskConfig &config,
      }
 
    plan.volume   = volume;
+   plan.slPips   = effectiveSl;
    plan.decision = RISK_DECISION_OPEN_FIRST;
    return(true);
   }
 
 //+------------------------------------------------------------------+
 //| Planifica un paso de grid aplicando topes y presupuesto.         |
+//| El presupuesto usa la misma distancia de SL derivada del ATR.    |
 //+------------------------------------------------------------------+
 bool LmPlanGridOrder(const RiskConfig &config,
                      const double balance,
@@ -283,11 +393,13 @@ bool LmPlanGridOrder(const RiskConfig &config,
                      const double volumeStep,
                      const double volumeMin,
                      const double volumeMax,
-                     RiskStepPlan &plan)
+                     RiskStepPlan &plan,
+                     const double atrPips = 0.0)
   {
    plan.decision      = RISK_DECISION_REJECT;
    plan.volume        = 0.0;
    plan.projectedLoss = 0.0;
+   plan.slPips        = config.slPips;
    plan.reason        = "";
 
    if(LmMaxStepsReached(currentSteps, config.maxGridSteps))
@@ -295,6 +407,8 @@ bool LmPlanGridOrder(const RiskConfig &config,
       plan.reason = "tope de pasos de grid alcanzado";
       return(false);
      }
+
+   double effectiveSl = LmEffectiveSlPips(config, atrPips);
 
    double volume = LmFloorVolume(requestedVolume, volumeStep);
    if(volume <= 0.0)
@@ -317,7 +431,7 @@ bool LmPlanGridOrder(const RiskConfig &config,
       volume = LmFloorVolume(volumeMax, volumeStep);
 
    double projected = LmProjectedLoss(currentVolume + volume,
-                                      config.slPips, pipValuePerLot);
+                                      effectiveSl, pipValuePerLot);
    plan.projectedLoss = projected;
 
    if(!LmFitsBasketBudget(projected, balance, config.maxBasketLossPct))
@@ -327,6 +441,7 @@ bool LmPlanGridOrder(const RiskConfig &config,
      }
 
    plan.volume   = volume;
+   plan.slPips   = effectiveSl;
    plan.decision = RISK_DECISION_OPEN_GRID;
    return(true);
   }

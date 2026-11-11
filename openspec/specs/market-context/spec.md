@@ -27,7 +27,7 @@ El sistema DEBE derivar el tamaño del pip, el valor del pip y el valor del tick
 
 ### Requirement: Snapshot de mercado consistente
 
-En cada tick el sistema DEBE leer bid, ask, spread, stops level y ATR una sola vez, y reutilizar esos valores durante todo el ciclo de decisión.
+En cada tick el sistema DEBE leer bid, ask, spread, stops level y ATR una sola vez, y reutilizar esos valores durante todo el ciclo de decisión. El snapshot DEBE incluir el ATR actual y la media del ATR de las últimas barras configuradas, para que la política de riesgo dimensione el lote sin volver a consultar el indicador.
 
 #### Scenario: Mismo bid y ask en todo el ciclo
 

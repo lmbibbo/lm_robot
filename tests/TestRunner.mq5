@@ -710,6 +710,7 @@ RuntimeConfig MakeRuntimeConfig()
    config.magic    = 111;
    config.strategy = LM_STRATEGY_SCALPER_PRO;
    config.risk     = LmDefaultRiskConfig();
+   config.risk.riskMode = LM_RISK_MANUAL;
    config.session  = LmDefaultSessionConfig();
 
    return(config);
@@ -1011,6 +1012,78 @@ void TestRiskVolumeAndStepCaps()
               "con el tope de pasos alcanzado no se planifica otro paso");
    AssertEqualInt((int)plan.decision, (int)RISK_DECISION_REJECT,
                   "el tope de pasos rechaza el paso");
+  }
+
+//+------------------------------------------------------------------+
+//| 5.3b Lote y SL proporcionales al ATR y factor de volatilidad.    |
+//+------------------------------------------------------------------+
+void TestRiskVolatilityScaling()
+  {
+   RiskConfig config = LmDefaultRiskConfig();
+   config.slPips       = 40.0;
+   config.atrSlMultiplier = 1.667;
+
+   //--- SL derivado del ATR: SlPips actua como piso.
+   AssertEqualDouble(LmEffectiveSlPips(config, 0.0), 40.0, 1e-9,
+                     "sin ATR el SL queda en SlPips");
+   AssertEqualDouble(LmEffectiveSlPips(config, 10.0), 40.0, 1e-9,
+                     "un ATR bajo no reduce el SL por debajo del piso");
+   AssertEqualDouble(LmEffectiveSlPips(config, 60.0), 100.02, 1e-9,
+                     "un ATR alto amplia el SL de forma proporcional");
+
+   RiskConfig wide = config;
+   wide.slPips = 1000.0;
+   AssertEqualDouble(LmEffectiveSlPips(wide, 60.0), 1000.0, 1e-9,
+                     "el piso configurado domina al ATR");
+
+   //--- Factor de volatilidad relativa, acotado.
+   AssertEqualDouble(LmVolatilityFactor(10.0, 10.0, 0.3, 2.0), 1.0, 1e-9,
+                     "volatilidad igual a la media no ajusta el lote");
+   AssertEqualDouble(LmVolatilityFactor(10.0, 20.0, 0.3, 2.0), 2.0, 1e-9,
+                     "volatilidad baja sube el lote hasta el tope");
+   AssertEqualDouble(LmVolatilityFactor(40.0, 10.0, 0.3, 2.0), 0.3, 1e-9,
+                     "volatilidad alta reduce el lote hasta el piso");
+   AssertEqualDouble(LmVolatilityFactor(10.0, 5.0, 0.3, 2.0), 0.5, 1e-9,
+                     "el factor es la razon media/actual");
+   AssertEqualDouble(LmVolatilityFactor(0.0, 20.0, 0.3, 2.0), 1.0, 1e-9,
+                     "sin ATR actual no hay ajuste");
+
+   //--- Lote proporcional al balance, al riesgo y al factor.
+   AssertEqualDouble(LmInitialLot(10000.0, 0.5, 40.0, 10.0, 0.01, 0.01, 100.0, 0.5),
+                     0.06, 1e-9,
+                     "el factor de volatilidad escala el lote");
+   AssertEqualDouble(LmInitialLot(20000.0, 0.5, 40.0, 10.0, 0.01, 0.01, 100.0),
+                     0.24, 1e-9,
+                     "el lote es proporcional al balance");
+   AssertEqualDouble(LmInitialLot(10000.0, 1.0, 40.0, 10.0, 0.01, 0.01, 100.0),
+                     0.25, 1e-9,
+                     "el lote es proporcional al riesgo");
+
+   //--- La planificacion usa el mismo SL por ATR y aplica el factor.
+   config.maxLotPerOrder       = 1.0;
+   config.maxVolumePerStrategy = 1.0;
+
+   RiskStepPlan plan;
+   AssertTrue(LmPlanInitialOrder(config, 10000.0, 10.0, 0.01, 0.01, 100.0,
+                                 plan, 30.0, 45.0),
+              "la apertura con ATR cabe en el presupuesto");
+   AssertEqualDouble(plan.slPips, 50.01, 1e-9,
+                     "la apertura usa el SL derivado del ATR");
+   AssertEqualDouble(plan.volume, 0.14, 1e-9,
+                     "la apertura aplica SL por ATR y factor de volatilidad");
+   AssertEqualDouble(plan.projectedLoss, 70.014, 1e-9,
+                     "la perdida proyectada usa el SL por ATR");
+
+   //--- El paso de grid valida el presupuesto con el SL por ATR.
+   config.maxBasketLossPct = 2.0;
+   AssertTrue(LmPlanGridOrder(config, 10000.0, 10.0, 0.20, 1, 0.10,
+                              0.01, 0.01, 100.0, plan, 30.0),
+              "el paso con ATR dentro del presupuesto se acepta");
+   AssertEqualDouble(plan.slPips, 50.01, 1e-9,
+                     "el paso usa el SL derivado del ATR");
+   AssertTrue(!LmPlanGridOrder(config, 10000.0, 10.0, 0.20, 1, 0.10,
+                               0.01, 0.01, 100.0, plan, 120.0),
+              "un ATR alto reduce el SL permitido y rechaza el paso");
   }
 
 //+------------------------------------------------------------------+
@@ -1406,6 +1479,16 @@ void TestMarketSnapshot()
                      "el getter reutiliza el bid leido");
    AssertEqualInt(context.Refreshes(), 1,
                   "los getters no vuelven a leer el mercado");
+
+   //--- ATR actual y medio viajan en el mismo snapshot.
+   AssertTrue(context.RefreshFromValues(1.10000, 1.10020,
+                                        D'2026.01.02 10:01:00',
+                                        true, 12.5, 10.0),
+              "snapshot con ATR inyectado");
+   AssertEqualDouble(context.AtrPips(), 12.5, 1e-9,
+                     "el snapshot expone el ATR actual en pips");
+   AssertEqualDouble(context.AtrAvgPips(), 10.0, 1e-9,
+                     "el snapshot expone la media del ATR en pips");
   }
 
 //+------------------------------------------------------------------+
@@ -1679,6 +1762,111 @@ void TestRuntimePipeline()
   }
 
 //+------------------------------------------------------------------+
+//| 7.5b Riesgo vivo: validacion del setter.                         |
+//+------------------------------------------------------------------+
+void TestRuntimeSetRiskPct()
+  {
+   CLmRuntime runtime;
+   AssertEqualInt((int)runtime.Config().risk.riskMode, (int)LM_RISK_AUTO,
+                  "el runtime arranca en modo automatico");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 0.5, 1e-9,
+                     "el runtime arranca con el riesgo por defecto");
+
+   AssertTrue(runtime.SetRiskMode(LM_RISK_MANUAL),
+              "la prueba del control manual fija la modalidad manual");
+
+   AssertTrue(runtime.SetRiskPct(4.0), "el setter acepta un riesgo valido");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 4.0, 1e-9,
+                     "el riesgo valido se lee de vuelta");
+
+   AssertTrue(!runtime.SetRiskPct(0.0), "el setter rechaza cero");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 4.0, 1e-9,
+                     "cero no modifica el riesgo previo");
+
+   AssertTrue(!runtime.SetRiskPct(-1.0), "el setter rechaza negativos");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 4.0, 1e-9,
+                     "un negativo no modifica el riesgo previo");
+
+   double nanValue = MathLog(-1.0);
+   AssertTrue(!MathIsValidNumber(nanValue), "el valor de prueba es NaN");
+   AssertTrue(!runtime.SetRiskPct(nanValue), "el setter rechaza NaN");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 4.0, 1e-9,
+                     "NaN no modifica el riesgo previo");
+  }
+
+//+------------------------------------------------------------------+
+//| 7.5c El riesgo ajustado dimensiona el proximo paso de grid.      |
+//+------------------------------------------------------------------+
+void TestRuntimeRiskAffectsNextGrid()
+  {
+   CTestBrokerState broker;
+   broker.m_magic  = 111;
+   broker.m_symbol = "TEST5";
+
+   CTestBrokerBackend backend(&broker);
+   CTestBrokerBasketSource baskets(&broker);
+   CTestBarSource bars;
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   CMarketContext market;
+   AssertTrue(market.InitFromInstrument(instrument, 3.0, 25.0),
+              "el runtime de riesgo inicia con un instrumento de prueba");
+
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   AssertTrue(executor.Init(&backend, &accounts, MakeRuntimeLimits(),
+                            MakeExecutionConfig(3, 0, 1000)),
+              "el runtime de riesgo inicia con un ejecutor simulado");
+
+   CTestDailyStore store;
+   CDailyLossGuard daily;
+   AssertTrue(daily.Init(&store, 123456, 4.0),
+              "el runtime de riesgo inicia con una guarda diaria");
+
+   RuntimeConfig config = MakeRuntimeConfig();
+   config.risk.maxLotPerOrder       = 9.0;
+   config.risk.maxVolumePerStrategy = 9.0;
+   config.risk.maxBasketLossPct     = 1000.0;
+
+   CLmRuntime runtime;
+   AssertTrue(runtime.Init(&market, &baskets, &bars, &executor, &daily, config),
+              "el runtime de riesgo se inicializa");
+
+   datetime bar1 = D'2026.01.02 10:00:00';
+   bars.Set(bar1, 1.1000, 1.0990);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromTick(1.10000, 1.10002, bar1);
+   runtime.ProcessTick(bar1, 10000.0, 10000.0);
+
+   AssertEqualInt(broker.Count(), 1, "se abre la primera orden de la canasta");
+   BasketPosition first = broker.PositionAt(0);
+   AssertEqualDouble(first.volume, 0.12, 1e-9,
+                     "la primera orden usa el riesgo inicial");
+
+   double firstSl = first.sl;
+
+   //--- Duplicar el riesgo no toca la posicion ya abierta.
+   AssertTrue(runtime.SetRiskPct(1.0), "el riesgo vivo se ajusta al doble");
+   AssertEqualDouble(broker.PositionAt(0).volume, 0.12, 1e-9,
+                     "el ajuste no redimensiona la posicion existente");
+   AssertEqualDouble(broker.PositionAt(0).sl, firstSl, 1e-9,
+                     "el ajuste no altera el stop loss existente");
+
+   //--- El siguiente paso de grid se dimensiona con el riesgo ajustado.
+   datetime bar2 = bar1 + 3600;
+   bars.Set(bar2, 1.0978, 1.0980);
+   broker.SetQuote(1.09780, 1.09782);
+   market.RefreshFromTick(1.09780, 1.09782, bar2);
+   runtime.ProcessTick(bar2, 10000.0, 10000.0);
+
+   AssertEqualInt(broker.Count(), 2, "la canasta recibe el paso de grid");
+   AssertEqualDouble(broker.PositionAt(0).volume, 0.12, 1e-9,
+                     "la posicion anterior conserva su volumen");
+   AssertEqualDouble(broker.PositionAt(1).volume, 0.37, 1e-9,
+                     "el nuevo paso crece con el riesgo duplicado");
+  }
+
+//+------------------------------------------------------------------+
 //| 7.4 La canasta abierta se gestiona con cada guard activo.        |
 //+------------------------------------------------------------------+
 void TestRuntimeGuardsKeepManaging()
@@ -1919,6 +2107,55 @@ void TestStrategySelectionRuntime()
   }
 
 //+------------------------------------------------------------------+
+//| 9.0 Ajuste del riesgo: rango, paso, limites y redondeo.          |
+//+------------------------------------------------------------------+
+void TestRiskControlSteps()
+  {
+   AssertTrue(LmRiskInControlRange(0.5), "0.5 esta dentro del rango");
+   AssertTrue(LmRiskInControlRange(4.0), "4.0 esta dentro del rango");
+   AssertTrue(LmRiskInControlRange(10.0), "10.0 esta dentro del rango");
+   AssertTrue(!LmRiskInControlRange(0.08), "0.08 queda fuera del rango");
+   AssertTrue(!LmRiskInControlRange(10.01), "10.01 queda fuera del rango");
+
+   AssertEqualDouble(LmNextRiskPct(4.0, +1), 4.5, 1e-9,
+                     "4.0 mas un paso da 4.5");
+   AssertEqualDouble(LmNextRiskPct(4.0, -1), 3.5, 1e-9,
+                     "4.0 menos un paso da 3.5");
+   AssertEqualDouble(LmNextRiskPct(0.5, -1), 0.5, 1e-9,
+                     "el minimo no baja");
+   AssertEqualDouble(LmNextRiskPct(10.0, +1), 10.0, 1e-9,
+                     "el maximo no sube");
+   AssertEqualDouble(LmNextRiskPct(0.08, +1), 0.08, 1e-9,
+                     "un riesgo fuera de rango no se ajusta");
+   AssertEqualDouble(LmNextRiskPct(4.0, 0), 4.0, 1e-9,
+                     "una direccion nula no cambia el riesgo");
+
+   AssertTrue(LmRiskCanStep(4.0, +1), "4.0 puede subir");
+   AssertTrue(LmRiskCanStep(4.0, -1), "4.0 puede bajar");
+   AssertTrue(!LmRiskCanStep(0.5, -1), "0.5 no puede bajar");
+   AssertTrue(!LmRiskCanStep(10.0, +1), "10.0 no puede subir");
+   AssertTrue(!LmRiskCanStep(0.08, +1), "un riesgo fuera de rango no puede subir");
+   AssertTrue(!LmRiskCanStep(0.08, -1), "un riesgo fuera de rango no puede bajar");
+
+   AssertEqualInt(LmRiskButtonDirection(LMROBOT_PANEL_BTN_RISK_DOWN), -1,
+                  "el boton '-' se resuelve como direccion negativa");
+   AssertEqualInt(LmRiskButtonDirection(LMROBOT_PANEL_BTN_RISK_UP), +1,
+                  "el boton '+' se resuelve como direccion positiva");
+   AssertEqualInt(LmRiskButtonDirection("LMROBOT_PANEL_0"), 0,
+                  "una etiqueta no se confunde con un boton");
+
+   //--- Diecinueve pasos desde 0.5 llegan exactos a 10.0.
+   double risk = 0.5;
+   for(int i = 0; i < 19; i++)
+      risk = LmNextRiskPct(risk, +1);
+
+   AssertEqualDouble(risk, 10.0, 1e-9,
+                     "el redondeo a dos decimales no acumula error");
+   AssertEqualDouble(LmNextRiskPct(risk, +1), 10.0, 1e-9,
+                     "tras llegar al maximo el riesgo queda estable");
+  }
+
+//+------------------------------------------------------------------+
 //| Estado de panel con una canasta abierta para las pruebas.        |
 //+------------------------------------------------------------------+
 DashboardState MakeTestDashboardState()
@@ -1934,6 +2171,7 @@ DashboardState MakeTestDashboardState()
 
    InstrumentInfo instrument = MakeFiveDigitInstrument();
    RiskConfig risk = LmDefaultRiskConfig();
+   risk.riskMode = LM_RISK_MANUAL;
 
    DailyLossState daily;
    LmResetDailyLossState(daily);
@@ -1968,8 +2206,8 @@ void TestDashboardFields()
                      "el panel expone el PnL del dia");
 
    string lines[];
-   AssertEqualInt(LmDashboardLines(state, "TEST5", lines), 8,
-                  "el panel contiene el titulo y los siete campos");
+   AssertEqualInt(LmDashboardLines(state, "TEST5", lines), 9,
+                  "el panel contiene el titulo, los siete campos y el riesgo");
    AssertTrue(StringFind(lines[1], "Scalper Pro") >= 0,
               "el panel muestra la estrategia");
    AssertTrue(StringFind(lines[2], "Compra") >= 0,
@@ -1984,6 +2222,8 @@ void TestDashboardFields()
               "el panel muestra el presupuesto usado");
    AssertTrue(StringFind(lines[7], "-50.00") >= 0,
               "el panel muestra el PnL del dia");
+   AssertTrue(StringFind(lines[8], "Riesgo: 0.50%") >= 0,
+              "el panel muestra el riesgo vivo en la ultima linea");
 
    //--- La canasta se cierra y la estrategia cambia: el panel se actualiza.
    BasketPosition none[];
@@ -2090,6 +2330,17 @@ void TestDashboardDirtyFlag()
    AssertEqualDouble(renderer.Last().dailyPnl, -51.0, 1e-9,
                      "el renderer recibe el estado actualizado");
 
+   //--- Un cambio solo de riesgo debe forzar el redibujo.
+   state.riskPct     = 4.5;
+   state.riskInRange = true;
+   state.canIncrease = true;
+   AssertTrue(dashboard.Update(state, "TEST5"),
+              "un cambio solo de riesgo redibuja el panel");
+   AssertEqualInt(renderer.Renders(), 3,
+                  "el renderer recibe el dibujo con el riesgo actualizado");
+   AssertEqualDouble(renderer.Last().riskPct, 4.5, 1e-9,
+                     "el renderer recibe el riesgo actualizado");
+
    dashboard.Clear();
    AssertEqualInt(renderer.Clears(), 1, "la desinicializacion limpia el panel");
    AssertTrue(!dashboard.HasState(), "tras limpiar no queda estado dibujado");
@@ -2105,12 +2356,25 @@ void TestDashboardCleanup()
 
    Comment("LMROBOT_TEST_COMMENT");
    renderer.Render(state, "TEST5");
-   AssertEqualInt(renderer.ObjectCount(), 8,
-                  "el panel crea un objeto por cada linea");
+   AssertEqualInt(renderer.ObjectCount(), 12,
+                  "el panel crea nueve etiquetas y tres botones");
+
+   AssertTrue(ObjectFind(0, LMROBOT_PANEL_BTN_RISK_DOWN) >= 0,
+              "el panel crea el boton de bajar riesgo");
+   AssertTrue(ObjectFind(0, LMROBOT_PANEL_BTN_RISK_MODE) >= 0,
+              "el panel crea el boton de modo");
+   AssertTrue(ObjectFind(0, LMROBOT_PANEL_BTN_RISK_UP) >= 0,
+              "el panel crea el boton de subir riesgo");
 
    renderer.Clear();
    AssertEqualInt(renderer.ObjectCount(), 0,
                   "la desinicializacion elimina todos los objetos del EA");
+   AssertTrue(ObjectFind(0, LMROBOT_PANEL_BTN_RISK_DOWN) < 0,
+              "la limpieza elimina el boton de bajar riesgo");
+   AssertTrue(ObjectFind(0, LMROBOT_PANEL_BTN_RISK_MODE) < 0,
+              "la limpieza elimina el boton de modo");
+   AssertTrue(ObjectFind(0, LMROBOT_PANEL_BTN_RISK_UP) < 0,
+              "la limpieza elimina el boton de subir riesgo");
 
    string comment = ChartGetString(0, CHART_COMMENT);
    AssertTrue(StringLen(comment) == 0 && comment != "LMROBOT_TEST_COMMENT",
@@ -2126,10 +2390,21 @@ void TestDashboardNoObjectsPerTick()
    CChartDashboardRenderer renderer;
 
    renderer.Render(state, "TEST5");
-   AssertEqualInt(renderer.CreatedCount(), 8,
-                  "el primer render crea ocho objetos");
-   AssertEqualInt(renderer.ObjectCount(), 8,
-                  "el panel queda con ocho objetos");
+   AssertEqualInt(renderer.CreatedCount(), 12,
+                  "el primer render crea nueve etiquetas y tres botones");
+   AssertEqualInt(renderer.ObjectCount(), 12,
+                  "el panel queda con doce objetos");
+
+   //--- El boton deshabilitado usa color atenuado y el habilitado no.
+   AssertTrue(ObjectGetInteger(0, LMROBOT_PANEL_BTN_RISK_DOWN,
+                               OBJPROP_BGCOLOR) == (long)clrDimGray,
+              "el boton '-' arranca atenuado en el minimo");
+   AssertTrue(ObjectGetInteger(0, LMROBOT_PANEL_BTN_RISK_UP,
+                               OBJPROP_BGCOLOR) == (long)clrSlateGray,
+              "el boton '+' arranca habilitado");
+   AssertTrue(ObjectGetInteger(0, LMROBOT_PANEL_BTN_RISK_MODE,
+                               OBJPROP_BGCOLOR) == (long)clrSlateGray,
+              "el boton de modo arranca habilitado");
 
    for(int i = 0; i < 10; i++)
      {
@@ -2137,10 +2412,26 @@ void TestDashboardNoObjectsPerTick()
       renderer.Render(state, "TEST5");
      }
 
-   AssertEqualInt(renderer.CreatedCount(), 8,
+   AssertEqualInt(renderer.CreatedCount(), 12,
                   "diez ticks con cambios no crean objetos nuevos");
-   AssertEqualInt(renderer.ObjectCount(), 8,
-                  "diez ticks con cambios mantienen ocho objetos");
+   AssertEqualInt(renderer.ObjectCount(), 12,
+                  "diez ticks con cambios mantienen doce objetos");
+
+   //--- Un render posterior reutiliza los botones y actualiza su estado.
+   state.riskPct     = 4.5;
+   state.riskInRange = true;
+   state.canDecrease = true;
+   state.canIncrease = true;
+   renderer.Render(state, "TEST5");
+
+   AssertEqualInt(renderer.CreatedCount(), 12,
+                  "el cambio de riesgo reutiliza los botones existentes");
+   AssertTrue(ObjectGetInteger(0, LMROBOT_PANEL_BTN_RISK_DOWN,
+                               OBJPROP_BGCOLOR) == (long)clrSlateGray,
+              "el boton '-' se actualiza a habilitado");
+   AssertTrue(ObjectGetInteger(0, LMROBOT_PANEL_BTN_RISK_DOWN,
+                               OBJPROP_STATE) == 0,
+              "los botones quedan sin seleccion");
 
    renderer.Clear();
    AssertEqualInt(renderer.ObjectCount(), 0,
@@ -2244,8 +2535,16 @@ void TestPortfolioDashboard()
                      "el panel conserva el PnL del dia");
 
    string lines[];
-   AssertEqualInt(LmDashboardLines(state, "TEST5", lines), 5,
-                  "portafolio de dos estrategias ocupa cinco lineas");
+   AssertEqualInt(LmDashboardLines(state, "TEST5", lines), 6,
+                  "portafolio de dos estrategias ocupa seis lineas");
+   AssertTrue(StringFind(lines[5], "Riesgo: 0.50%") >= 0,
+              "el portafolio muestra el riesgo vivo al final");
+
+   CChartDashboardRenderer renderer;
+   renderer.Render(state, "TEST5");
+   AssertEqualInt(renderer.ObjectCount(), 9,
+                  "portafolio de dos estrategias usa seis lineas y tres botones");
+   renderer.Clear();
   }
 
 //+------------------------------------------------------------------+
@@ -2427,6 +2726,336 @@ void TestRuntimePortfolioIndependence()
   }
 
 //+------------------------------------------------------------------+
+//| 12.0 Configuracion por defecto de la modalidad de riesgo.        |
+//+------------------------------------------------------------------+
+void TestRiskModeConfig()
+  {
+   RiskConfig config = LmDefaultRiskConfig();
+
+   AssertEqualInt((int)config.riskMode, (int)LM_RISK_AUTO,
+                  "la configuracion por defecto arranca en modo automatico");
+   AssertEqualDouble(config.riskBasePct, config.riskPct, 1e-9,
+                     "la base automatica arranca igual al riesgo configurado");
+   AssertEqualDouble(config.autoRiskMaxPct, 6.0, 1e-9,
+                     "el tope automatico por defecto es 6.0%");
+
+   config.riskMode = LM_RISK_MANUAL;
+   AssertEqualInt((int)config.riskMode, (int)LM_RISK_MANUAL,
+                  "el control manual se fija explicitamente en los tests");
+
+   DashboardState panel = MakeTestDashboardState();
+   AssertEqualInt((int)panel.riskMode, (int)LM_RISK_MANUAL,
+                  "el panel de prueba usa la modalidad manual explicita");
+   AssertEqualInt((int)MakeRuntimeConfig().risk.riskMode, (int)LM_RISK_MANUAL,
+                  "el runtime de prueba usa la modalidad manual explicita");
+  }
+
+//+------------------------------------------------------------------+
+//| 12.1 Riesgo automatico: volatilidad, tope, redondeo y sin ATR.   |
+//+------------------------------------------------------------------+
+void TestAutoRiskPct()
+  {
+   //--- Volatilidad actual por encima de la media: factor 0.5.
+   AssertEqualDouble(LmAutoRiskPct(4.0, 20.0, 10.0, 0.3, 2.0, 6.0),
+                     2.0, 1e-9,
+                     "con ATR actual alto el riesgo automatico baja");
+
+   //--- Volatilidad actual por debajo de la media: factor 2.0, tope 6.
+   AssertEqualDouble(LmAutoRiskPct(4.0, 10.0, 20.0, 0.3, 2.0, 6.0),
+                     6.0, 1e-9,
+                     "con ATR actual bajo el riesgo sube hasta el tope 6.0");
+
+   //--- Tope personalizado.
+   AssertEqualDouble(LmAutoRiskPct(4.0, 10.0, 20.0, 0.3, 2.0, 3.0),
+                     3.0, 1e-9,
+                     "el tope personalizado 3.0 recorta el riesgo automatico");
+
+   //--- Base por encima del tope.
+   AssertEqualDouble(LmAutoRiskPct(8.0, 10.0, 10.0, 0.3, 2.0, 6.0),
+                     6.0, 1e-9,
+                     "una base por encima del tope queda en el tope");
+
+   //--- Minimo fijo y redondeo a dos decimales.
+   AssertEqualDouble(LmAutoRiskPct(0.1, 10.0, 10.0, 0.3, 2.0, 6.0),
+                     0.5, 1e-9,
+                     "el riesgo automatico no baja de 0.5");
+   AssertEqualDouble(LmAutoRiskPct(2.345, 0.0, 0.0, 0.3, 2.0, 6.0),
+                     2.35, 1e-9,
+                     "el riesgo automatico se redondea a dos decimales");
+
+   //--- Sin lectura valida de ATR el factor es 1.0.
+   AssertEqualDouble(LmAutoRiskPct(4.0, 0.0, 0.0, 0.3, 2.0, 6.0),
+                     4.0, 1e-9,
+                     "sin ATR el riesgo automatico queda en la base");
+
+   //--- El tope se sanea a 0.5-10.0 dentro de la funcion pura.
+   AssertEqualDouble(LmAutoRiskPct(12.0, 10.0, 10.0, 0.3, 2.0, 20.0),
+                     10.0, 1e-9,
+                     "un tope por encima de 10 se sanea a 10");
+   AssertEqualDouble(LmAutoRiskPct(4.0, 10.0, 10.0, 0.3, 2.0, 0.1),
+                     0.5, 1e-9,
+                     "un tope por debajo de 0.5 se sanea a 0.5");
+  }
+
+//+------------------------------------------------------------------+
+//| 12.2 El runtime automatico sigue al ATR y rechaza el ajuste      |
+//| manual.                                                          |
+//+------------------------------------------------------------------+
+void TestRuntimeAutoRisk()
+  {
+   CTestBrokerState broker;
+   broker.m_magic  = 111;
+   broker.m_symbol = "TEST5";
+
+   CTestBrokerBackend backend(&broker);
+   CTestBrokerBasketSource baskets(&broker);
+   CTestBarSource bars;
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   CMarketContext market;
+   AssertTrue(market.InitFromInstrument(instrument, 3.0, 25.0),
+              "el runtime automatico inicia con un instrumento de prueba");
+
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   AssertTrue(executor.Init(&backend, &accounts, MakeRuntimeLimits(),
+                            MakeExecutionConfig(3, 0, 1000)),
+              "el runtime automatico inicia con un ejecutor simulado");
+
+   CTestDailyStore store;
+   CDailyLossGuard daily;
+   AssertTrue(daily.Init(&store, 123456, 4.0),
+              "el runtime automatico inicia con una guarda diaria");
+
+   RuntimeConfig config = MakeRuntimeConfig();
+   config.risk.riskMode       = LM_RISK_AUTO;
+   config.risk.riskPct        = 4.0;
+   config.risk.riskBasePct    = 4.0;
+   config.risk.autoRiskMaxPct = 6.0;
+
+   CLmRuntime runtime;
+   AssertTrue(runtime.Init(&market, &baskets, &bars, &executor, &daily, config),
+              "el runtime automatico se inicializa");
+
+   datetime bar = D'2026.01.02 10:00:00';
+   market.RefreshFromValues(1.10000, 1.10002, bar, true, 20.0, 10.0);
+   runtime.ProcessTick(bar, 10000.0, 10000.0);
+   AssertEqualDouble(runtime.Config().risk.riskPct, 2.0, 1e-9,
+                     "el riesgo automatico baja cuando el ATR actual supera la media");
+
+   AssertTrue(!runtime.SetRiskPct(9.0),
+              "el ajuste manual no pisa el riesgo en modo automatico");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 2.0, 1e-9,
+                     "el riesgo automatico conserva su valor tras el intento manual");
+
+   market.RefreshFromValues(1.10000, 1.10002, bar + 1, true, 10.0, 20.0);
+   runtime.ProcessTick(bar + 1, 10000.0, 10000.0);
+   AssertEqualDouble(runtime.Config().risk.riskPct, 6.0, 1e-9,
+                     "el riesgo automatico sube hasta el tope configurado");
+
+   market.RefreshFromValues(1.10000, 1.10002, bar + 2, false, 0.0, 0.0);
+   runtime.ProcessTick(bar + 2, 10000.0, 10000.0);
+   AssertEqualDouble(runtime.Config().risk.riskPct, 4.0, 1e-9,
+                     "sin ATR el riesgo automatico vuelve a la base");
+  }
+
+//+------------------------------------------------------------------+
+//| 12.3 Conmutacion de modalidad con continuidad del riesgo.        |
+//+------------------------------------------------------------------+
+void TestRuntimeRiskModeSwitch()
+  {
+   CTestBrokerState broker;
+   broker.m_magic  = 111;
+   broker.m_symbol = "TEST5";
+
+   CTestBrokerBackend backend(&broker);
+   CTestBrokerBasketSource baskets(&broker);
+   CTestBarSource bars;
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   CMarketContext market;
+   AssertTrue(market.InitFromInstrument(instrument, 3.0, 25.0),
+              "el runtime de conmutacion inicia con un instrumento de prueba");
+
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   AssertTrue(executor.Init(&backend, &accounts, MakeRuntimeLimits(),
+                            MakeExecutionConfig(3, 0, 1000)),
+              "el runtime de conmutacion inicia con un ejecutor simulado");
+
+   CTestDailyStore store;
+   CDailyLossGuard daily;
+   AssertTrue(daily.Init(&store, 123456, 4.0),
+              "el runtime de conmutacion inicia con una guarda diaria");
+
+   RuntimeConfig config = MakeRuntimeConfig();
+   config.risk.riskMode       = LM_RISK_AUTO;
+   config.risk.riskPct        = 4.0;
+   config.risk.riskBasePct    = 4.0;
+   config.risk.autoRiskMaxPct = 6.0;
+
+   CLmRuntime runtime;
+   AssertTrue(runtime.Init(&market, &baskets, &bars, &executor, &daily, config),
+              "el runtime de conmutacion se inicializa");
+
+   datetime bar = D'2026.01.02 10:00:00';
+   market.RefreshFromValues(1.10000, 1.10002, bar, true, 10.0, 10.0);
+   runtime.ProcessTick(bar, 10000.0, 10000.0);
+
+   AssertTrue(runtime.SetRiskMode(LM_RISK_MANUAL),
+              "se puede pasar a manual en caliente");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 4.0, 1e-9,
+                     "auto -> manual conserva el ultimo riesgo automatico");
+
+   AssertTrue(runtime.SetRiskPct(5.0), "en manual se ajusta el riesgo vivo");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 5.0, 1e-9,
+                     "el ajuste manual queda como riesgo vivo");
+
+   market.RefreshFromValues(1.10000, 1.10002, bar + 1, true, 20.0, 10.0);
+   AssertTrue(runtime.SetRiskMode(LM_RISK_AUTO),
+              "se puede volver a automatico en caliente");
+   AssertEqualDouble(runtime.Config().risk.riskBasePct, 5.0, 1e-9,
+                     "manual -> auto captura el riesgo vivo como base");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 2.5, 1e-9,
+                     "la base se ajusta con el ATR vigente al conmutar");
+
+   market.RefreshFromValues(1.10000, 1.10002, bar + 2, true, 20.0, 10.0);
+   runtime.ProcessTick(bar + 2, 10000.0, 10000.0);
+   AssertEqualDouble(runtime.Config().risk.riskPct, 2.5, 1e-9,
+                     "los ticks sucesivos no recomponen la base automatica");
+
+   AssertTrue(runtime.SetRiskMode(LM_RISK_MANUAL),
+              "auto -> manual vuelve a habilitar el control");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 2.5, 1e-9,
+                     "manual parte del ultimo valor automatico");
+
+   AssertTrue(runtime.SetRiskPct(3.0), "el riesgo manual se puede reajustar");
+   market.RefreshFromValues(1.10000, 1.10002, bar + 3, true, 10.0, 10.0);
+   AssertTrue(runtime.SetRiskMode(LM_RISK_AUTO),
+              "una segunda conmutacion a automatico funciona");
+   AssertEqualDouble(runtime.Config().risk.riskBasePct, 3.0, 1e-9,
+                     "la base se recaptura en cada entrada a automatico");
+   AssertEqualDouble(runtime.Config().risk.riskPct, 3.0, 1e-9,
+                     "las conmutaciones repetidas conservan la continuidad");
+
+   AssertTrue(!runtime.SetRiskMode((ENUM_LM_RISK_MODE)99),
+              "una modalidad desconocida se rechaza");
+  }
+
+//+------------------------------------------------------------------+
+//| 12.4 En automatico el lote no repite el factor de volatilidad.   |
+//+------------------------------------------------------------------+
+void TestAutoLotIgnoresVolatility()
+  {
+   RiskConfig manual = LmDefaultRiskConfig();
+   manual.riskMode       = LM_RISK_MANUAL;
+   manual.riskPct        = 1.0;
+   manual.maxLotPerOrder = 9.0;
+   manual.maxVolumePerStrategy = 9.0;
+   manual.maxBasketLossPct = 1000.0;
+
+   RiskConfig automatic = manual;
+   automatic.riskMode = LM_RISK_AUTO;
+
+   double atrA = 10.0;
+   double atrB = 20.0;
+   double avgA = 20.0;
+   double avgB = 5.0;
+
+   RiskStepPlan manualHigh;
+   RiskStepPlan manualLow;
+   AssertTrue(LmPlanInitialOrder(manual, 10000.0, 10.0, 0.01, 0.01, 100.0,
+                                 manualHigh, atrA, avgA),
+              "el plan manual con ATR medio alto se calcula");
+   AssertTrue(LmPlanInitialOrder(manual, 10000.0, 10.0, 0.01, 0.01, 100.0,
+                                 manualLow, atrB, avgB),
+              "el plan manual con ATR medio bajo se calcula");
+   AssertTrue(MathAbs(manualHigh.volume - manualLow.volume) > 1e-9,
+              "en manual el lote cambia con la volatilidad relativa");
+
+   double autoAvgA = (automatic.riskMode == LM_RISK_AUTO ? atrA : avgA);
+   double autoAvgB = (automatic.riskMode == LM_RISK_AUTO ? atrB : avgB);
+
+   RiskStepPlan autoHigh;
+   RiskStepPlan autoLow;
+   AssertTrue(LmPlanInitialOrder(automatic, 10000.0, 10.0, 0.01, 0.01, 100.0,
+                                 autoHigh, atrA, autoAvgA),
+              "el plan automatico con el primer ATR se calcula");
+   AssertTrue(LmPlanInitialOrder(automatic, 10000.0, 10.0, 0.01, 0.01, 100.0,
+                                 autoLow, atrB, autoAvgB),
+              "el plan automatico con el segundo ATR se calcula");
+   AssertEqualDouble(autoHigh.volume, autoLow.volume, 1e-9,
+                     "en automatico el lote no repite el ajuste por volatilidad");
+  }
+
+//+------------------------------------------------------------------+
+//| 12.5 Panel: modalidad, linea y habitabilidad de los botones.     |
+//+------------------------------------------------------------------+
+void TestDashboardRiskMode()
+  {
+   DashboardState manual = MakeTestDashboardState();
+   AssertEqualInt((int)manual.riskMode, (int)LM_RISK_MANUAL,
+                  "el panel expone la modalidad manual");
+
+   string lines[];
+   LmDashboardLines(manual, "TEST5", lines);
+   AssertTrue(StringFind(lines[8], "Riesgo: 0.50% (manual)") >= 0,
+              "la linea de riesgo incluye la modalidad manual");
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   BasketState flat;
+   LmResetBasket(flat, "TEST5", 111);
+   DailyLossState daily;
+   LmResetDailyLossState(daily);
+
+   RiskConfig automatic = LmDefaultRiskConfig();
+   automatic.riskPct = 4.0;
+
+   DashboardState autoState = LmBuildDashboardState(LM_STRATEGY_SCALPER_PRO,
+                                                    flat, automatic, daily,
+                                                    instrument, 10000.0, 10000.0);
+   AssertEqualInt((int)autoState.riskMode, (int)LM_RISK_AUTO,
+                  "el panel expone la modalidad automatica");
+   AssertTrue(autoState.riskInRange,
+              "el riesgo automatico siempre esta en el rango operable");
+   AssertTrue(!autoState.canDecrease && !autoState.canIncrease,
+              "en automatico los botones +/- quedan deshabilitados");
+
+   LmDashboardLines(autoState, "TEST5", lines);
+   AssertTrue(StringFind(lines[8], "Riesgo: 4.00% (auto)") >= 0,
+              "la linea de riesgo incluye la modalidad automatica");
+   AssertTrue(StringFind(lines[8], "fuera de 0.5-10") < 0,
+              "la leyenda de fuera de rango no aplica en automatico");
+
+   RiskConfig outside = LmDefaultRiskConfig();
+   outside.riskMode = LM_RISK_MANUAL;
+   outside.riskPct  = 0.08;
+
+   DashboardState outsideState = LmBuildDashboardState(LM_STRATEGY_SCALPER_PRO,
+                                                       flat, outside, daily,
+                                                       instrument, 10000.0, 10000.0);
+   AssertTrue(!outsideState.riskInRange,
+              "un riesgo manual fuera de rango se reporta");
+   AssertTrue(!outsideState.canDecrease && !outsideState.canIncrease,
+              "fuera de rango manual los botones quedan deshabilitados");
+
+   LmDashboardLines(outsideState, "TEST5", lines);
+   AssertTrue(StringFind(lines[8], "Riesgo: 0.08% (manual)") >= 0,
+              "el panel muestra el riesgo manual fuera de rango");
+   AssertTrue(StringFind(lines[8], "fuera de 0.5-10") >= 0,
+              "la leyenda de fuera de rango aparece solo en manual");
+
+   AssertTrue(LmRiskModeButton(LMROBOT_PANEL_BTN_RISK_MODE),
+              "el boton de modo se reconoce por su nombre");
+   AssertTrue(!LmRiskModeButton(LMROBOT_PANEL_BTN_RISK_UP),
+              "el boton '+' no se confunde con el de modo");
+   AssertTrue(LmRiskModeButtonText(LM_RISK_MANUAL) == "Modo: Manual",
+              "el boton de modo rotula la modalidad manual");
+   AssertTrue(LmRiskModeButtonText(LM_RISK_AUTO) == "Modo: Auto",
+              "el boton de modo rotula la modalidad automatica");
+  }
+
+//+------------------------------------------------------------------+
 //| Casos de prueba. Crece con cada modulo del motor.                |
 //+------------------------------------------------------------------+
 void RunTests()
@@ -2453,6 +3082,7 @@ void RunTests()
    TestRiskInitialLot();
    TestRiskProjectedLoss();
    TestRiskVolumeAndStepCaps();
+   TestRiskVolatilityScaling();
    TestDailyLossGuard();
    TestRiskManagementPriority();
    TestScalperSignal();
@@ -2464,8 +3094,17 @@ void RunTests()
    TestBarGate();
    TestSessionGuard();
    TestRuntimePipeline();
+   TestRuntimeSetRiskPct();
+   TestRuntimeRiskAffectsNextGrid();
    TestRuntimeGuardsKeepManaging();
    TestStrategySelectionRuntime();
+   TestRiskControlSteps();
+   TestRiskModeConfig();
+   TestAutoRiskPct();
+   TestRuntimeAutoRisk();
+   TestRuntimeRiskModeSwitch();
+   TestAutoLotIgnoresVolatility();
+   TestDashboardRiskMode();
    TestDashboardFields();
    TestDashboardDirtyFlag();
    TestDashboardCleanup();

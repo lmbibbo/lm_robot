@@ -21,6 +21,7 @@ struct MarketSnapshot
    int               stopsLevel;
    int               freezeLevel;
    double            atrPips;
+   double            atrAvgPips;
    bool              hasAtr;
    bool              highVolatility;
    bool              spreadBlocked;
@@ -51,6 +52,7 @@ MarketSnapshot LmBuildSnapshot(const string symbol, const datetime time,
                                const int stopsLevel, const int freezeLevel,
                                const InstrumentInfo &instrument,
                                const bool hasAtr, const double atrPips,
+                               const double atrAvgPips,
                                const double maxSpreadPips, const double maxAtrPips)
   {
    MarketSnapshot snapshot;
@@ -64,6 +66,7 @@ MarketSnapshot LmBuildSnapshot(const string symbol, const datetime time,
    snapshot.stopsLevel   = stopsLevel;
    snapshot.freezeLevel  = freezeLevel;
    snapshot.atrPips      = atrPips;
+   snapshot.atrAvgPips   = atrAvgPips;
    snapshot.hasAtr       = hasAtr;
    snapshot.highVolatility = LmHighVolatility(hasAtr, atrPips, maxAtrPips);
    snapshot.spreadBlocked  = false;
@@ -102,6 +105,7 @@ private:
    int               m_atrPeriod;
    double            m_maxSpreadPips;
    double            m_maxAtrPips;
+   int               m_atrLookback;
    int               m_handleCreations;
    int               m_refreshes;
    bool              m_ready;
@@ -118,6 +122,7 @@ private:
       m_snapshot.stopsLevel     = 0;
       m_snapshot.freezeLevel    = 0;
       m_snapshot.atrPips        = 0.0;
+      m_snapshot.atrAvgPips     = 0.0;
       m_snapshot.hasAtr         = false;
       m_snapshot.highVolatility = false;
       m_snapshot.spreadBlocked  = false;
@@ -133,20 +138,38 @@ private:
       m_instrument.freezeLevel = freezeLevel;
      }
 
-   //--- Lee el ATR de la ultima barra cerrada (shift 1).
-   bool ReadAtr(double &atrPips)
+   //--- Lee el ATR de la ultima barra cerrada (shift 1) y su media.
+   bool ReadAtr(double &atrPips, double &atrAvgPips)
      {
-      atrPips = 0.0;
+      atrPips    = 0.0;
+      atrAvgPips = 0.0;
 
       if(m_atrHandle == INVALID_HANDLE || m_instrument.pipSize <= 0.0)
          return(false);
 
+      int lookback = (m_atrLookback > 0 ? m_atrLookback : 1);
+
       double buffer[];
       ArraySetAsSeries(buffer, true);
-      if(CopyBuffer(m_atrHandle, 0, 1, 1, buffer) <= 0)
+      int copied = CopyBuffer(m_atrHandle, 0, 1, lookback, buffer);
+      if(copied <= 0)
          return(false);
 
       atrPips = buffer[0] / m_instrument.pipSize;
+
+      double sum = 0.0;
+      int valid  = 0;
+      for(int i = 0; i < copied; i++)
+        {
+         if(buffer[i] <= 0.0)
+            continue;
+         sum += buffer[i];
+         valid++;
+        }
+
+      if(valid > 0)
+         atrAvgPips = (sum / valid) / m_instrument.pipSize;
+
       return(atrPips > 0.0);
      }
 
@@ -162,6 +185,7 @@ public:
       m_atrPeriod        = 14;
       m_maxSpreadPips    = 0.0;
       m_maxAtrPips       = 0.0;
+      m_atrLookback      = 50;
       m_handleCreations  = 0;
       m_refreshes        = 0;
       m_ready            = false;
@@ -256,6 +280,12 @@ public:
       return(m_ready);
      }
 
+   //--- Barras usadas para la media historica del ATR.
+   void SetAtrLookback(const int lookback)
+     {
+      m_atrLookback = (lookback > 0 ? lookback : 1);
+     }
+
    //--- Refresco de produccion: un solo SymbolInfoTick por tick.
    bool Refresh()
      {
@@ -275,14 +305,16 @@ public:
    //--- Refresco con valores inyectados (pruebas / simulacion).
    bool RefreshFromTick(const double bid, const double ask, const datetime time)
      {
-      double atrPips = 0.0;
-      bool hasAtr    = ReadAtr(atrPips);
-      return(RefreshFromValues(bid, ask, time, hasAtr, atrPips));
+      double atrPips    = 0.0;
+      double atrAvgPips = 0.0;
+      bool hasAtr       = ReadAtr(atrPips, atrAvgPips);
+      return(RefreshFromValues(bid, ask, time, hasAtr, atrPips, atrAvgPips));
      }
 
    //--- Refresco con ATR inyectado (pruebas / simulacion).
    bool RefreshFromValues(const double bid, const double ask, const datetime time,
-                          const bool hasAtr, const double atrPips)
+                          const bool hasAtr, const double atrPips,
+                          const double atrAvgPips = 0.0)
      {
       m_refreshes++;
       ResetSnapshot();
@@ -296,7 +328,7 @@ public:
 
       m_snapshot = LmBuildSnapshot(m_symbol, time, bid, ask,
                                    stopsLevel, freezeLevel, m_instrument,
-                                   hasAtr, atrPips,
+                                   hasAtr, atrPips, atrAvgPips,
                                    m_maxSpreadPips, m_maxAtrPips);
       return(m_snapshot.valid);
      }
@@ -307,6 +339,7 @@ public:
    double         Ask()             { return(m_snapshot.ask); }
    double         SpreadPips()      { return(m_snapshot.spreadPips); }
    double         AtrPips()         { return(m_snapshot.atrPips); }
+   double         AtrAvgPips()      { return(m_snapshot.atrAvgPips); }
    bool           HasAtr()          { return(m_snapshot.hasAtr); }
    bool           SpreadBlocked()   { return(m_snapshot.spreadBlocked); }
    bool           HighVolatility()  { return(m_snapshot.highVolatility); }

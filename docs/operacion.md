@@ -48,7 +48,9 @@ del gráfico. No es un input porque las reglas de las tres estrategias lo asumen
 
 | Input | Valor inicial | Significado |
 |---|---:|---|
-| `RiskPct` | `0.5` | Riesgo de la primera orden, en porcentaje del balance. Define el lote inicial junto con `SlPips` y el valor del pip. |
+| `RiskMode` | `Auto` | Modalidad inicial: `Auto` o `Manual`. El panel permite alternarla en caliente. |
+| `AutoRiskMaxPct` | `6.0` | Tope máximo del riesgo automático, en porcentaje. Rango válido 0.5–10.0; fuera de él el EA no inicia. |
+| `RiskPct` | `0.5` | Riesgo base en porcentaje del balance. En `Manual` es el riesgo vivo inicial y ajustable; en `Auto` es la base del cálculo por volatilidad. Define el lote inicial junto con `SlPips` y el valor del pip. |
 | `MaxBasketLossPct` | `2.0` | Pérdida máxima proyectada de toda la canasta al stop loss, en porcentaje del balance. Es el presupuesto que se compara antes de cada paso. |
 | `DailyLossLimitPct` | `4.0` | Caída máxima de equidad respecto del inicio del día del servidor, en porcentaje. Al alcanzarse se bloquean aperturas hasta el día siguiente. |
 | `MaxGridSteps` | `4` | Cantidad máxima de pasos de grid además de la orden inicial. |
@@ -100,8 +102,8 @@ registra en el log de Expertos.
 
 ## Panel de estado
 
-El panel se dibuja en la esquina superior izquierda del gráfico. Muestra siete
-campos:
+El panel se dibuja en la esquina superior izquierda del gráfico. Muestra los
+siete campos de la canasta y una línea adicional con el riesgo vivo:
 
 | Campo | Interpretación |
 |---|---|
@@ -112,12 +114,37 @@ campos:
 | **Próximo grid** | Precio al que se habilitaría el siguiente paso: por debajo del promedio en compras, por encima en ventas. Muestra `-` sin canasta. |
 | **Presupuesto usado** | Porcentaje del presupuesto `MaxBasketLossPct` consumido por la pérdida proyectada de la canasta al stop loss. `0.0%` sin canasta. |
 | **PnL del día** | Diferencia entre la equidad actual y la equidad registrada al inicio del día del servidor. Incluye resultado flotante. |
+| **Riesgo** | Riesgo vivo usado para dimensionar, con dos decimales y la modalidad entre paréntesis: `(manual)` o `(auto)`. En `Manual` es el valor de `RiskPct` ajustado con los botones; en `Auto` se recalcula en cada tick desde la base y el ATR, acotado a 0.5–`AutoRiskMaxPct`. |
+
+Debajo de la última línea aparecen tres botones:
+
+- `-` baja el riesgo vivo **0.5** puntos porcentuales y `+` lo sube otros **0.5**.
+  Solo actúan en modo `Manual`.
+- El rango operable manual es **0.5–10**. En el mínimo, `-` queda atenuado y no
+  responde; en el máximo ocurre lo mismo con `+`.
+- `Modo: Manual`/`Modo: Auto` alterna la modalidad en caliente. `Manual → Auto`
+  captura el riesgo vivo como base del cálculo automático; `Auto → Manual` deja los
+  botones partiendo del último valor automático. En `Auto`, `+`/`-` quedan
+  atenuados e ignoran el clic.
+- El riesgo automático sigue la volatilidad relativa: con ATR actual por encima de
+  la media baja, y por debajo sube, sin superar `AutoRiskMaxPct`. Sin ATR válido se
+  usa la base acotada.
+- Cada clic actualiza el riesgo de inmediato y el panel lo refleja sin reiniciar el
+  EA. El cambio se aplica a la próxima orden y a los pasos siguientes de la
+  canasta; no redimensiona posiciones abiertas ni modifica su SL o TP.
+- Si el input `RiskPct` queda fuera de 0.5–10 en modo `Manual` (por ejemplo `0.08`),
+  el panel lo muestra con la leyenda `fuera de 0.5-10: control deshabilitado` y
+  ambos botones quedan atenuados. El riesgo no se recorta: se sigue usando para
+  dimensionar. La leyenda no aplica en `Auto`.
+- El ajuste y la modalidad viven solo en memoria: al reiniciar el EA o el terminal
+  se vuelve a `RiskMode` y a `RiskPct`, con el tope `AutoRiskMaxPct` si arranca en
+  `Auto`.
 
 El panel es una proyección del estado del motor: no recalcula indicadores ni crea
-objetos en cada tick. Un *dirty flag* compara los siete valores y solo redibuja
-cuando cambia alguno. Por eso un tick sin cambios no produce redibujos, y el PnL
-del día puede actualizarse con más frecuencia que el resto cuando hay posiciones
-abiertas.
+objetos en cada tick. Un *dirty flag* compara los valores, incluidos el riesgo y la
+modalidad, y solo redibuja cuando cambia alguno. Por eso un tick sin cambios no produce
+redibujos, y el PnL del día puede actualizarse con más frecuencia que el resto
+cuando hay posiciones abiertas.
 
 Al retirar el EA del gráfico, `OnDeinit` elimina todos los objetos del panel y
 deja el comentario del gráfico limpio.
@@ -128,14 +155,22 @@ deja el comentario del gráfico limpio.
 2. Adjuntar `LmRobot.ex5` a un gráfico del símbolo y timeframe deseados.
 3. Verificar en el log de Expertos el mensaje de inicialización: símbolo,
    estrategia, dígitos, tamaño del pip, valor del pip por lote y modo de cuenta.
-4. Confirmar que el panel muestra los siete campos.
+4. Confirmar que el panel muestra la canasta, el riesgo vivo, los botones `-`/`+`
+   y el botón de modo.
 5. Revisar que `MagicNumber` no colisione con otra instancia.
 
 ## Verificación
 
 Las pruebas de `tests/TestRunner.mq5` cubren el panel:
 
-- los siete campos se construyen y se actualizan al cambiar la canasta, la
-  estrategia o el PnL del día;
+- los siete campos de la canasta y la línea de riesgo se construyen y se
+  actualizan al cambiar la canasta, la estrategia o el PnL del día;
+- el ajuste manual respeta el paso 0.5, los límites 0.5–10 y el input fuera de
+  rango sin recortarlo;
+- la línea de riesgo muestra `(manual)`/`(auto)` y el botón de modo alterna la
+  modalidad;
+- en automático los botones `-`/`+` quedan atenuados y no ajustan el riesgo;
+- los tres botones se reutilizan entre renders y se atenúan según corresponda;
 - diez ticks sin cambios no incrementan el contador de redibujos;
-- la limpieza elimina todos los objetos del EA y deja el comentario vacío.
+- la limpieza elimina todos los objetos del EA, incluidos los tres botones, y deja
+  el comentario vacío.

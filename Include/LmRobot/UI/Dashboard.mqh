@@ -14,6 +14,82 @@
 //--- Prefijo unico de los objetos que crea el panel.
 #define LM_DASHBOARD_PREFIX "LMROBOT_PANEL_"
 
+//--- Rango y paso del control de riesgo vivo.
+#define LM_RISK_MIN_PCT   0.5
+#define LM_RISK_MAX_PCT   10.0
+#define LM_RISK_STEP_PCT  0.5
+
+//--- Nombres estables de los botones de ajuste.
+#define LMROBOT_PANEL_BTN_RISK_DOWN "LMROBOT_PANEL_BTN_RISK_DOWN"
+#define LMROBOT_PANEL_BTN_RISK_MODE "LMROBOT_PANEL_BTN_RISK_MODE"
+#define LMROBOT_PANEL_BTN_RISK_UP   "LMROBOT_PANEL_BTN_RISK_UP"
+
+//+------------------------------------------------------------------+
+//| El riesgo esta dentro del rango operable del control.            |
+//+------------------------------------------------------------------+
+bool LmRiskInControlRange(const double riskPct)
+  {
+   return(riskPct >= LM_RISK_MIN_PCT - 1e-9 &&
+          riskPct <= LM_RISK_MAX_PCT + 1e-9);
+  }
+
+//+------------------------------------------------------------------+
+//| El riesgo admite un paso en la direccion indicada (-1 / +1).     |
+//+------------------------------------------------------------------+
+bool LmRiskCanStep(const double riskPct, const int direction)
+  {
+   if(!LmRiskInControlRange(riskPct))
+      return(false);
+
+   if(direction < 0)
+      return(riskPct > LM_RISK_MIN_PCT + 1e-9);
+
+   if(direction > 0)
+      return(riskPct < LM_RISK_MAX_PCT - 1e-9);
+
+   return(false);
+  }
+
+//+------------------------------------------------------------------+
+//| Siguiente riesgo tras un paso. Redondea a dos decimales y no     |
+//| cambia el valor si el paso quedaria fuera del rango operable.    |
+//+------------------------------------------------------------------+
+double LmNextRiskPct(const double riskPct, const int direction)
+  {
+   if(direction == 0 || !LmRiskCanStep(riskPct, direction))
+      return(riskPct);
+
+   double next = riskPct + (direction > 0 ? LM_RISK_STEP_PCT : -LM_RISK_STEP_PCT);
+   next = MathRound(next * 100.0) / 100.0;
+
+   if(!LmRiskInControlRange(next))
+      return(riskPct);
+
+   return(next);
+  }
+
+//+------------------------------------------------------------------+
+//| Direccion asociada a un nombre de boton: -1, +1 o 0 si no es uno.|
+//+------------------------------------------------------------------+
+int LmRiskButtonDirection(const string objectName)
+  {
+   if(objectName == LMROBOT_PANEL_BTN_RISK_DOWN)
+      return(-1);
+
+   if(objectName == LMROBOT_PANEL_BTN_RISK_UP)
+      return(+1);
+
+   return(0);
+  }
+
+//+------------------------------------------------------------------+
+//| El objeto clicado es el boton que alterna la modalidad.          |
+//+------------------------------------------------------------------+
+bool LmRiskModeButton(const string objectName)
+  {
+   return(objectName == LMROBOT_PANEL_BTN_RISK_MODE);
+  }
+
 //+------------------------------------------------------------------+
 //| Fila del panel: una estrategia o el agregado de la instancia.    |
 //+------------------------------------------------------------------+
@@ -51,6 +127,11 @@ struct DashboardState
    double                nextGridPrice;
    double                budgetUsedPct;
    double                dailyPnl;
+   ENUM_LM_RISK_MODE     riskMode;
+   double                riskPct;
+   bool                  riskInRange;
+   bool                  canDecrease;
+   bool                  canIncrease;
    int                   digits;
    bool                  valid;
    bool                  portfolio;
@@ -82,6 +163,11 @@ void LmResetDashboardState(DashboardState &state)
    state.nextGridPrice = 0.0;
    state.budgetUsedPct = 0.0;
    state.dailyPnl      = 0.0;
+   state.riskMode      = LM_RISK_AUTO;
+   state.riskPct       = 0.0;
+   state.riskInRange   = false;
+   state.canDecrease   = false;
+   state.canIncrease   = false;
    state.digits        = 5;
    state.valid         = false;
    state.portfolio     = false;
@@ -104,6 +190,22 @@ string LmBasketDirectionName(const ENUM_BASKET_DIRECTION direction)
       return("Venta");
 
    return("Plana");
+  }
+
+//+------------------------------------------------------------------+
+//| Nombre legible de la modalidad de riesgo.                        |
+//+------------------------------------------------------------------+
+string LmRiskModeName(const ENUM_LM_RISK_MODE mode)
+  {
+   return(mode == LM_RISK_MANUAL ? "manual" : "auto");
+  }
+
+//+------------------------------------------------------------------+
+//| Texto del boton que alterna la modalidad.                        |
+//+------------------------------------------------------------------+
+string LmRiskModeButtonText(const ENUM_LM_RISK_MODE mode)
+  {
+   return(mode == LM_RISK_MANUAL ? "Modo: Manual" : "Modo: Auto");
   }
 
 //+------------------------------------------------------------------+
@@ -170,6 +272,21 @@ void LmFillDashboardRow(DashboardRow &row, const ENUM_LM_STRATEGY strategy,
   }
 
 //+------------------------------------------------------------------+
+//| Copia modalidad, riesgo vivo y habitabilidad del control.        |
+//| En automatico los botones +/- quedan siempre deshabilitados.     |
+//+------------------------------------------------------------------+
+void LmFillDashboardRisk(DashboardState &state, const RiskConfig &risk)
+  {
+   state.riskMode    = risk.riskMode;
+   state.riskPct     = risk.riskPct;
+   state.riskInRange = LmRiskInControlRange(risk.riskPct);
+   state.canDecrease = (risk.riskMode == LM_RISK_MANUAL &&
+                        LmRiskCanStep(risk.riskPct, -1));
+   state.canIncrease = (risk.riskMode == LM_RISK_MANUAL &&
+                        LmRiskCanStep(risk.riskPct, +1));
+  }
+
+//+------------------------------------------------------------------+
 //| Construye el estado del panel para una sola estrategia.          |
 //+------------------------------------------------------------------+
 DashboardState LmBuildDashboardState(const ENUM_LM_STRATEGY strategy,
@@ -186,6 +303,7 @@ DashboardState LmBuildDashboardState(const ENUM_LM_STRATEGY strategy,
    state.strategy = strategy;
    state.digits   = (instrument.digits > 0 ? instrument.digits : 5);
    state.valid    = true;
+   LmFillDashboardRisk(state, risk);
 
    if(basket.count > 0)
      {
@@ -221,6 +339,7 @@ DashboardState LmBuildPortfolioDashboardState(StrategyView &views[],
 
    state.digits = (instrument.digits > 0 ? instrument.digits : 5);
    state.valid  = true;
+   LmFillDashboardRisk(state, risk);
 
    int total = MathMin(MathMax(viewCount, 0), LM_MAX_ACTIVE_STRATEGIES);
    state.rowCount  = total;
@@ -303,6 +422,11 @@ bool LmDashboardStateEquals(const DashboardState &a, const DashboardState &b)
       a.direction != b.direction || a.digits != b.digits)
       return(false);
 
+   if(a.riskInRange != b.riskInRange ||
+      a.riskMode != b.riskMode ||
+      a.canDecrease != b.canDecrease || a.canIncrease != b.canIncrease)
+      return(false);
+
    if(a.portfolio != b.portfolio || a.rowCount != b.rowCount)
       return(false);
 
@@ -320,7 +444,8 @@ bool LmDashboardStateEquals(const DashboardState &a, const DashboardState &b)
           MathAbs(a.averagePrice - b.averagePrice) <= 1e-9 &&
           MathAbs(a.nextGridPrice - b.nextGridPrice) <= 1e-9 &&
           MathAbs(a.budgetUsedPct - b.budgetUsedPct) <= 1e-9 &&
-          MathAbs(a.dailyPnl - b.dailyPnl) <= 1e-9);
+          MathAbs(a.dailyPnl - b.dailyPnl) <= 1e-9 &&
+          MathAbs(a.riskPct - b.riskPct) <= 1e-9);
   }
 
 //+------------------------------------------------------------------+
@@ -340,9 +465,24 @@ string LmDashboardRowLine(const DashboardRow &row, const int digits)
   }
 
 //+------------------------------------------------------------------+
+//| Linea del riesgo vivo y su estado de control.                    |
+//+------------------------------------------------------------------+
+string LmDashboardRiskLine(const DashboardState &state)
+  {
+   string line = "Riesgo: " + DoubleToString(state.riskPct, 2) + "% (" +
+                 LmRiskModeName(state.riskMode) + ")";
+
+   if(state.riskMode == LM_RISK_MANUAL && !state.riskInRange)
+      line += " (fuera de 0.5-10: control deshabilitado)";
+
+   return(line);
+  }
+
+//+------------------------------------------------------------------+
 //| Lineas del panel.                                               |
-//| Modo unico: titulo + los siete campos del contrato (8 lineas).   |
-//| Modo ALL: titulo + una fila por estrategia + agregado + PnL dia. |
+//| Modo unico: titulo + los siete campos + riesgo (9 lineas).       |
+//| Modo ALL: titulo + una fila por estrategia + agregado + PnL dia  |
+//| + riesgo (rowCount + 4 lineas).                                  |
 //+------------------------------------------------------------------+
 int LmDashboardLines(const DashboardState &state, const string symbol,
                      string &lines[])
@@ -351,7 +491,7 @@ int LmDashboardLines(const DashboardState &state, const string symbol,
 
    if(state.portfolio && state.rowCount > 0)
      {
-      int total = state.rowCount + 3;
+      int total = state.rowCount + 4;
       ArrayResize(lines, total);
 
       lines[0] = "LmRobot " + symbol;
@@ -366,11 +506,12 @@ int LmDashboardLines(const DashboardState &state, const string symbol,
                                   " | Vol " + DoubleToString(state.aggregate.volume, 2) +
                                   " | Pres " + DoubleToString(state.aggregate.budgetUsedPct, 1) + "%";
       lines[2 + state.rowCount] = "PnL del dia: " + DoubleToString(state.dailyPnl, 2);
+      lines[3 + state.rowCount] = LmDashboardRiskLine(state);
 
       return(ArraySize(lines));
      }
 
-   ArrayResize(lines, 8);
+   ArrayResize(lines, 9);
 
    lines[0] = "LmRobot " + symbol;
    lines[1] = "Estrategia: " + LmStrategyName(state.strategy);
@@ -384,6 +525,7 @@ int LmDashboardLines(const DashboardState &state, const string symbol,
                                   : "-");
    lines[6] = "Presupuesto usado: " + DoubleToString(state.budgetUsedPct, 1) + "%";
    lines[7] = "PnL del dia: " + DoubleToString(state.dailyPnl, 2);
+   lines[8] = LmDashboardRiskLine(state);
 
    return(ArraySize(lines));
   }
@@ -411,6 +553,38 @@ private:
    string ObjectNameAt(const int index)
      {
       return(LM_DASHBOARD_PREFIX + IntegerToString(index));
+     }
+
+   //--- Crea o actualiza un boton del panel sin recrearlo.
+   void RenderRiskButton(const string name, const string text, const int x,
+                         const int y, const bool enabled,
+                         const int width = 22)
+     {
+      if(ObjectFind(0, name) < 0)
+        {
+         if(!ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0))
+            return;
+
+         m_createdCount++;
+         ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+         ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+         ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
+         ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+        }
+
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+      ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
+      ObjectSetInteger(0, name, OBJPROP_YSIZE, 18);
+      ObjectSetString(0, name, OBJPROP_TEXT, text);
+      ObjectSetInteger(0, name, OBJPROP_STATE, false);
+      ObjectSetInteger(0, name, OBJPROP_BGCOLOR,
+                       (enabled ? clrSlateGray : clrDimGray));
+      ObjectSetInteger(0, name, OBJPROP_COLOR,
+                       (enabled ? clrWhite : clrGray));
+      ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR,
+                       (enabled ? clrSilver : clrDimGray));
      }
 
 public:
@@ -446,6 +620,16 @@ public:
          ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 18 + i * 16);
          ObjectSetString(0, name, OBJPROP_TEXT, lines[i]);
         }
+
+      //--- Controles de riesgo debajo de la ultima linea.
+      int buttonY = 18 + total * 16 + 6;
+      RenderRiskButton(LMROBOT_PANEL_BTN_RISK_DOWN, "-", 12, buttonY,
+                       state.canDecrease);
+      RenderRiskButton(LMROBOT_PANEL_BTN_RISK_MODE,
+                       LmRiskModeButtonText(state.riskMode), 38, buttonY,
+                       true, 92);
+      RenderRiskButton(LMROBOT_PANEL_BTN_RISK_UP, "+", 134, buttonY,
+                       state.canIncrease);
 
       ChartRedraw(0);
      }

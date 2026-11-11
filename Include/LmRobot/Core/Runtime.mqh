@@ -261,6 +261,7 @@ public:
    int              maxGridSteps;
    double           maxProjectedLoss;
    double           maxProjectedLossPct;
+   double           slPips;
    double           lastOpenPnl;
    double           realizedPnl;
    double           pnlPeak;
@@ -285,6 +286,7 @@ public:
       maxGridSteps      = 0;
       maxProjectedLoss  = 0.0;
       maxProjectedLossPct = 0.0;
+      slPips            = 0.0;
       lastOpenPnl       = 0.0;
       realizedPnl       = 0.0;
       pnlPeak           = 0.0;
@@ -321,7 +323,7 @@ public:
      }
 
    void ObserveExposure(const double balance, const RiskConfig &risk,
-                        const InstrumentInfo &instrument)
+                        const InstrumentInfo &instrument, const double basketSlPips)
      {
       if(basket.volume > maxBasketVolume)
          maxBasketVolume = basket.volume;
@@ -333,7 +335,8 @@ public:
       if(instrument.pipValuePerLot <= 0.0)
          return;
 
-      double projected = LmProjectedLoss(basket.volume, risk.slPips,
+      double effectiveSl = (basketSlPips > 0.0 ? basketSlPips : risk.slPips);
+      double projected = LmProjectedLoss(basket.volume, effectiveSl,
                                          instrument.pipValuePerLot);
       if(projected > maxProjectedLoss)
          maxProjectedLoss = projected;
@@ -442,9 +445,13 @@ private:
          totalVolume += m_slots[i].basket.volume;
 
          if(instrument.pipValuePerLot > 0.0)
+           {
+            double slPips = (m_slots[i].slPips > 0.0
+                             ? m_slots[i].slPips : m_config.risk.slPips);
             projectedLoss += LmProjectedLoss(m_slots[i].basket.volume,
-                                             m_config.risk.slPips,
+                                             slPips,
                                              instrument.pipValuePerLot);
+           }
         }
      }
 
@@ -470,7 +477,7 @@ private:
 
    //--- Presupuesto agregado de la instancia, solo en modo ALL.
    bool AggregateAllows(const int slotIndex, const double newVolume,
-                        const double balance)
+                        const double newSlPips, const double balance)
      {
       if(m_slotCount <= 1)
          return(true);
@@ -488,11 +495,16 @@ private:
       for(int i = 0; i < m_slotCount; i++)
         {
          double volume = m_slots[i].basket.volume;
+         double slPips = (m_slots[i].slPips > 0.0
+                          ? m_slots[i].slPips : m_config.risk.slPips);
          if(i == slotIndex)
+           {
             volume += newVolume;
+            slPips  = (newSlPips > 0.0 ? newSlPips : slPips);
+           }
 
          totalVolume += volume;
-         projected += LmProjectedLoss(volume, m_config.risk.slPips,
+         projected += LmProjectedLoss(volume, slPips,
                                       instrument.pipValuePerLot);
         }
 
@@ -519,7 +531,7 @@ private:
 
    //--- Proteccion de entrada de una orden nueva.
    bool EntryProtection(const ENUM_ORDER_TYPE type, const double price,
-                        double &sl, double &tp)
+                        const double slPips, double &sl, double &tp)
      {
       sl = 0.0;
       tp = 0.0;
@@ -528,7 +540,8 @@ private:
       if(price <= 0.0 || instrument.pipSize <= 0.0)
          return(false);
 
-      double slDistance = m_config.risk.slPips * instrument.pipSize;
+      double effectiveSl = (slPips > 0.0 ? slPips : m_config.risk.slPips);
+      double slDistance = effectiveSl * instrument.pipSize;
       double tpDistance = m_config.risk.tpPips * instrument.pipSize;
 
       if(type == ORDER_TYPE_BUY)
@@ -592,7 +605,11 @@ private:
       double sl = 0.0;
       double tp = 0.0;
 
-      if(!LmBasketProtectionPrices(slot.basket, m_config.risk.slPips,
+      //--- Tras un reinicio se reconstruye la distancia con el ATR actual.
+      if(slot.slPips <= 0.0)
+         slot.slPips = LmEffectiveSlPips(m_config.risk, m_market.AtrPips());
+
+      if(!LmBasketProtectionPrices(slot.basket, slot.slPips,
                                    m_config.risk.tpPips, instrument.pipSize,
                                    instrument.digits, sl, tp))
          return;
@@ -729,17 +746,24 @@ private:
 
       SymbolLimits limits = m_executor.Limits();
       InstrumentInfo instrument = m_market.Instrument();
+      double atrPips    = m_market.AtrPips();
+      double atrAvgPips = m_market.AtrAvgPips();
+
+      //--- En automatico el riesgo ya expresa la volatilidad: el lote no
+      //--- vuelve a aplicar el factor (avgAtr = atr -> factor 1.0).
+      double planAvgAtrPips = (m_config.risk.riskMode == LM_RISK_AUTO
+                               ? atrPips : atrAvgPips);
 
       RiskStepPlan plan;
       if(!LmPlanInitialOrder(m_config.risk, balance, instrument.pipValuePerLot,
                              limits.volumeStep, limits.volumeMin,
-                             limits.volumeMax, plan))
+                             limits.volumeMax, plan, atrPips, planAvgAtrPips))
         {
          m_result.lastReason = plan.reason;
          return(false);
         }
 
-      if(!AggregateAllows(slotIndex, plan.volume, balance))
+      if(!AggregateAllows(slotIndex, plan.volume, plan.slPips, balance))
          return(false);
 
       ENUM_ORDER_TYPE type = (signal == SIGNAL_BUY ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
@@ -747,7 +771,7 @@ private:
 
       double sl = 0.0;
       double tp = 0.0;
-      if(!EntryProtection(type, price, sl, tp))
+      if(!EntryProtection(type, price, plan.slPips, sl, tp))
         {
          m_result.lastReason = "no se pudo calcular la proteccion de entrada";
          return(false);
@@ -758,9 +782,10 @@ private:
          return(false);
 
       //--- Relee la canasta para registrar la exposicion inicial.
+      slot.slPips = plan.slPips;
       m_baskets.Scan(slot.magic, slot.basket);
       slot.tracker.Update(slot.basket);
-      slot.ObserveExposure(balance, m_config.risk, instrument);
+      slot.ObserveExposure(balance, m_config.risk, instrument, slot.slPips);
       SyncSlotResults();
       return(true);
      }
@@ -775,6 +800,13 @@ private:
 
       SymbolLimits limits = m_executor.Limits();
       InstrumentInfo instrument = m_market.Instrument();
+      double atrPips    = m_market.AtrPips();
+      double atrAvgPips = m_market.AtrAvgPips();
+
+      //--- Mismo criterio que en la apertura: en automatico el lote base
+      //--- no repite el ajuste por volatilidad.
+      double planAvgAtrPips = (m_config.risk.riskMode == LM_RISK_AUTO
+                               ? atrPips : atrAvgPips);
 
       ENUM_ORDER_TYPE type = (slot.basket.direction == BASKET_DIRECTION_BUY
                               ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
@@ -793,7 +825,7 @@ private:
       RiskStepPlan initialPlan;
       if(!LmPlanInitialOrder(m_config.risk, balance, instrument.pipValuePerLot,
                              limits.volumeStep, limits.volumeMin,
-                             limits.volumeMax, initialPlan))
+                             limits.volumeMax, initialPlan, atrPips, planAvgAtrPips))
         {
          m_result.lastReason = initialPlan.reason;
          return(false);
@@ -807,13 +839,13 @@ private:
       if(!LmPlanGridOrder(m_config.risk, balance, instrument.pipValuePerLot,
                           slot.basket.volume, slot.tracker.StepCount(), requested,
                           limits.volumeStep, limits.volumeMin, limits.volumeMax,
-                          plan))
+                          plan, atrPips))
         {
          m_result.lastReason = plan.reason;
          return(false);
         }
 
-      if(!AggregateAllows(slotIndex, plan.volume, balance))
+      if(!AggregateAllows(slotIndex, plan.volume, plan.slPips, balance))
          return(false);
 
       //--- Nuevo promedio proyectado con el volumen y precio del paso.
@@ -829,7 +861,7 @@ private:
 
       double sl = 0.0;
       double tp = 0.0;
-      if(!LmBasketProtectionPrices(projected, m_config.risk.slPips,
+      if(!LmBasketProtectionPrices(projected, plan.slPips,
                                    m_config.risk.tpPips, instrument.pipSize,
                                    instrument.digits, sl, tp))
         {
@@ -842,9 +874,10 @@ private:
          return(false);
 
       //--- Relee la canasta para reenviar la nueva proteccion a todos.
+      slot.slPips = plan.slPips;
       m_baskets.Scan(slot.magic, slot.basket);
       slot.tracker.Update(slot.basket);
-      slot.ObserveExposure(balance, m_config.risk, instrument);
+      slot.ObserveExposure(balance, m_config.risk, instrument, slot.slPips);
       SyncSlotResults();
       ManageBasket(slot);
       return(true);
@@ -893,6 +926,8 @@ public:
       m_slotCount = count;
       m_ready    = true;
 
+      m_market.SetAtrLookback(config.risk.atrLookback);
+
       m_barGate.Reset();
       LmResetDailyLossState(m_dailyState);
 
@@ -924,6 +959,16 @@ public:
          return(false);
         }
 
+      //--- En automatico el riesgo vivo se recalcula en cada tick desde la
+      //--- base capturada (no desde el resultado anterior).
+      if(m_config.risk.riskMode == LM_RISK_AUTO)
+         m_config.risk.riskPct = LmAutoRiskPct(m_config.risk.riskBasePct,
+                                               m_market.AtrPips(),
+                                               m_market.AtrAvgPips(),
+                                               m_config.risk.volFactorMin,
+                                               m_config.risk.volFactorMax,
+                                               m_config.risk.autoRiskMaxPct);
+
       InstrumentInfo instrument = m_market.Instrument();
 
       //--- 1. Estado de cada canasta y gestion en cada tick.
@@ -934,7 +979,8 @@ public:
          BasketState scanned;
          m_baskets.Scan(m_slots[i].magic, scanned);
          m_slots[i].Observe(scanned);
-         m_slots[i].ObserveExposure(balance, m_config.risk, instrument);
+         m_slots[i].ObserveExposure(balance, m_config.risk, instrument,
+                                    m_slots[i].slPips);
 
          if(m_slots[i].tracker.JustClosed())
            {
@@ -1022,6 +1068,48 @@ public:
    DailyLossState DailyState() { return(m_dailyState); }
    bool         IsReady()      { return(m_ready); }
    int          StrategyCount() { return(m_slotCount); }
+
+   //--- Riesgo vivo: valida y escribe la unica fuente de dimensionamiento.
+   //--- En automatico lo calcula la politica, no el control manual.
+   bool SetRiskPct(const double pct)
+     {
+      if(m_config.risk.riskMode == LM_RISK_AUTO)
+         return(false);
+
+      if(!MathIsValidNumber(pct) || pct <= 0.0)
+         return(false);
+
+      m_config.risk.riskPct = pct;
+      return(true);
+     }
+
+   //--- Conmutacion de modalidad con continuidad del riesgo vivo.
+   bool SetRiskMode(const ENUM_LM_RISK_MODE mode)
+     {
+      if(mode != LM_RISK_MANUAL && mode != LM_RISK_AUTO)
+         return(false);
+
+      if(mode == m_config.risk.riskMode)
+         return(true);
+
+      if(mode == LM_RISK_AUTO)
+        {
+         double atrPips    = (m_market != NULL ? m_market.AtrPips() : 0.0);
+         double avgAtrPips = (m_market != NULL ? m_market.AtrAvgPips() : 0.0);
+
+         m_config.risk.riskBasePct = m_config.risk.riskPct;
+         m_config.risk.riskPct = LmAutoRiskPct(m_config.risk.riskBasePct,
+                                               atrPips,
+                                               avgAtrPips,
+                                               m_config.risk.volFactorMin,
+                                               m_config.risk.volFactorMax,
+                                               m_config.risk.autoRiskMaxPct);
+        }
+
+      //--- Auto -> Manual conserva el ultimo riesgo automatico.
+      m_config.risk.riskMode = mode;
+      return(true);
+     }
 
    bool StrategyAt(const int index, ENUM_LM_STRATEGY &strategy,
                    BasketState &basket, long &magic)

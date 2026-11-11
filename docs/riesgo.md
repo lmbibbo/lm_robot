@@ -12,21 +12,59 @@ calibran con los resultados, no son compromisos de producto.
 
 | Parámetro | Valor inicial | Uso |
 |---|---:|---|
-| `RiskPct` | 0.5% | Riesgo de la primera orden respecto del balance. |
+| `RiskMode` | `Auto` | Modalidad inicial del riesgo vivo: `Auto` o `Manual`. El panel permite alternarla en caliente. |
+| `AutoRiskMaxPct` | 6.0% | Tope máximo del riesgo automático. Rango válido 0.5–10.0; fuera de él el EA no inicia. |
+| `RiskPct` | 0.5% | Riesgo base: en `Manual` es el riesgo vivo inicial y ajustable; en `Auto` es la base del cálculo por volatilidad. |
 | `MaxBasketLossPct` | 2% | Pérdida máxima proyectada de toda la canasta al stop loss. |
 | `DailyLossLimitPct` | 4% | Caída máxima de equidad respecto del inicio del día del servidor. |
 | `MaxGridSteps` | 4 | Cantidad máxima de pasos de grid además de la orden inicial. |
 | `LotMultiplier` | 1.5 | Multiplicador de volumen entre pasos consecutivos. |
 | `MaxLotPerOrder` | 0.10 | Volumen máximo de una sola orden. |
 | `MaxVolumePerStrategy` | 0.30 | Volumen máximo acumulado de la canasta. |
-| `SL_pips` | 40 | Distancia del stop loss de canasta, en pips. |
+| `SL_pips` | 40 | Piso del stop loss de canasta, en pips. |
 | `TP_pips` | 8 | Distancia del take profit de canasta, en pips. |
 | `GridStepPips` | 22 | Distancia desde la última orden para habilitar el siguiente paso. |
 | `MaxSpreadPips` | 3 | Spread máximo para permitir aperturas. |
+| `AtrSlMultiplier` | 1.667 | Multiplicador del ATR para ampliar el stop loss. |
+| `AtrLookback` | 50 | Barras usadas para la media histórica del ATR. |
+| `VolFactorMin` | 0.3 | Piso del factor de volatilidad sobre el lote. |
+| `VolFactorMax` | 2.0 | Techo del factor de volatilidad sobre el lote. |
 
 Los topes de pérdida y de volumen se comparan contra el `balance`, no contra la
 equidad, para que un drawdown flotante no habilite más riesgo. El límite diario
 es la excepción: compara equidad actual contra equidad de inicio del día.
+
+## Riesgo vivo
+
+El riesgo usado para dimensionar (`RuntimeConfig.risk.riskPct`) es un valor vivo
+propiedad del runtime. Su fuente depende de la modalidad:
+
+- **`Auto` (por defecto)**. En cada tick se calcula desde la base y la
+  volatilidad relativa:
+  `riesgo = clamp(base * clamp(ATR_medio / ATR_actual, VolFactorMin, VolFactorMax), 0.5, AutoRiskMaxPct)`,
+  redondeado a dos decimales. La base es el input `RiskPct` al iniciar o el riesgo
+  vivo capturado al pasar de `Manual` a `Auto`; mientras permanece en `Auto` no se
+  recompone con los resultados sucesivos. Sin lectura válida de ATR el factor es
+  `1.0` y el riesgo queda en la base acotada. El mínimo sigue fijo en 0.5 y el tope
+  superior es `AutoRiskMaxPct`.
+- **`Manual`**. Arranca en el input `RiskPct` y **no se recorta** al iniciar. Un
+  valor fuera de `0.5–10`, por ejemplo `0.08`, se usa tal cual para dimensionar y
+  solo deja los botones de ajuste deshabilitados.
+- Los botones `+`/`-` del panel solo actúan en `Manual`: suben o bajan el riesgo en
+  pasos fijos de **0.5** puntos porcentuales, dentro del rango **0.5–10**. En el
+  mínimo o en el máximo, el botón correspondiente no responde. En `Auto` ambos
+  botones quedan atenuados e ignoran el clic.
+- El botón de modo alterna `Manual`/`Auto` en caliente. `Manual → Auto` captura el
+  riesgo vivo como base; `Auto → Manual` conserva el último valor automático y los
+  botones parten de él. Alternar repetidamente no acumula volatilidad.
+- Se usa en la apertura de canastas nuevas y en el próximo paso de grid y los
+  siguientes de una canasta abierta.
+- No redimensiona las posiciones ya abiertas ni cambia su stop loss o take profit.
+- Subir el riesgo a mitad de canasta puede hacer que `MaxBasketLossPct` rechace el
+  próximo paso: el guard no reduce el volumen, simplemente no permite el paso.
+- No hay persistencia por cuenta ni por magic: al reiniciar el EA o el terminal, la
+  modalidad vuelve al input `RiskMode` y el riesgo al valor del input `RiskPct`
+  (acotado por `AutoRiskMaxPct` si arranca en `Auto`).
 
 ## Fórmulas
 
@@ -40,10 +78,46 @@ valor_pip_por_lote  = tick_value / (tick_size / pip_size)
 
 Estas conversiones viven en `Include/LmRobot/Core/Instrument.mqh`.
 
+### Stop loss proporcional al ATR
+
+`SL_pips` actúa como piso. Cuando hay lectura válida de ATR, la distancia se
+amplía proporcionalmente a la volatilidad:
+
+```
+SL_efectivo = max(SL_pips, ATR_pips * AtrSlMultiplier)
+```
+
+El ATR se lee de la última barra cerrada y se expresa en pips. Esta misma
+distancia se usa para dimensionar el lote, para proyectar la pérdida y como stop
+loss real de la canasta: si el ATR sube, el lote baja y el stop se aleja, de modo
+que el riesgo monetario se mantiene cercano al configurado.
+
+### Factor de volatilidad
+
+Además del stop por ATR, el lote se ajusta contra la volatilidad media de las
+últimas `AtrLookback` barras:
+
+```
+factor_volatilidad = clamp(ATR_medio / ATR_actual, VolFactorMin, VolFactorMax)
+```
+
+Con volatilidad igual a la media no hay ajuste (`1.0`). Si la volatilidad actual
+supera la media el lote se reduce, y si está por debajo se aumenta, siempre dentro
+de los topes configurados.
+
+En modo `Manual` este factor se aplica al lote. En modo `Auto` el riesgo vivo ya
+incorpora la volatilidad relativa, así que el lote **no vuelve a aplicar** el
+factor: se usa `factor_volatilidad = 1.0` para no duplicar el efecto. El stop
+efectivo sí sigue derivándose del ATR en ambas modalidades.
+
 ### Lote inicial
 
 ```
-lote_inicial = (RiskPct / 100 * balance) / (SL_pips * valor_pip_por_lote)
+riesgo_vivo = RiskPct en manual, ajustado por los botones +/-
+              o base * factor_volatilidad en automatico, acotado a 0.5-AutoRiskMaxPct
+
+lote_inicial = (riesgo_vivo / 100 * balance) / (SL_efectivo * valor_pip_por_lote)
+               * factor_volatilidad
 ```
 
 El resultado se redondea **hacia abajo** al `volume_step` del broker y se acota
@@ -78,7 +152,7 @@ lote_paso_n = lote_inicial * LotMultiplier^n
 ### Pérdida proyectada y presupuesto
 
 ```
-perdida_proyectada = (volumen_actual_canasta + lote_nuevo) * SL_pips * valor_pip_por_lote
+perdida_proyectada = (volumen_actual_canasta + lote_nuevo) * SL_efectivo * valor_pip_por_lote
 presupuesto        = balance * MaxBasketLossPct / 100
 ```
 
@@ -158,7 +232,16 @@ por stop loss se ejecuta igual y solo se bloquean canastas nuevas.
 Las pruebas de `tests/TestRunner.mq5` cubren:
 
 - lote inicial 10.000 / 0.5% / 40 pips / 10 por pip = 0.12 y clamp al broker;
-- rechazo de un paso que excede el 2% del balance;
+- riesgo vivo ajustable en pasos de 0.5, con límites 0.5–10 y sin recorte del input;
+- modalidad `Auto` por defecto, tope `AutoRiskMaxPct` (6.0 por defecto, rango
+  0.5–10.0) y cálculo por volatilidad redondeado a dos decimales;
+- conmutación `Manual`/`Auto` en caliente con continuidad de la base y del último
+  valor automático;
+- en `Auto` el lote no repite el factor de volatilidad;
+- la apertura y el próximo paso de grid usan el riesgo vigente sin tocar lo abierto;
+- SL derivado del ATR con piso en `SL_pips` y factor de volatilidad acotado;
+- lote proporcional al balance, al riesgo y al factor de volatilidad;
+- rechazo de un paso que excede el 2% del balance, usando el SL efectivo;
 - cada tope de volumen y de pasos de forma independiente;
 - persistencia del límite diario tras un reinicio simulado y reinicio en un nuevo
   día del servidor;
