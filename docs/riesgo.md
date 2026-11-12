@@ -246,3 +246,9 @@ Las pruebas de `tests/TestRunner.mq5` cubren:
 - persistencia del límite diario tras un reinicio simulado y reinicio en un nuevo
   día del servidor;
 - prioridad de la gestión sobre las aperturas con el límite diario activo.
+
+## Deuda técnica relacionada
+
+- [DT-001 — Invariancia de riesgo y perfil entre timeframes](deuda/DT-001-invariancia-timeframe.md):
+  define si el riesgo se ancla por operación o por tiempo. Afecta la lectura de
+  `SL_efectivo`, los topes agregados y la cadencia de apertura.
