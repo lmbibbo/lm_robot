@@ -16,7 +16,7 @@ El proyecto vive dentro de la carpeta de datos de un terminal
 ## Layout
 
 ```
-EA/                      Expert Advisor principal (LmRobot.mq5)
+EA/                      Expert Advisors (LmRobot.mq5 referencia, LmRobot-M1.mq5 variante M1)
 Include/LmRobot/         Módulos del motor, incluidos con #include
   Core/                  Contexto de mercado, utilidades, snapshot
   Risk/                  Cálculo de lote, límites y guardas
@@ -54,6 +54,16 @@ Resultado: 0 error(es), 0 warning(s)
 
 y el código de salida del proceso es `0`. Si hay errores, el script los imprime y
 devuelve `1`, así que sirve para encadenar en CI.
+
+## Compilar la variante M1
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Source EA\LmRobot-M1.mq5
+```
+
+La variante M1 comparte los mismos `Include/LmRobot` que la referencia. La
+diferencia funcional está en el input `SignalTimeframe` (por defecto `PERIOD_M1`)
+y en un `MagicNumber` propio. Detalle en [instancias/m1.md](instancias/m1.md).
 
 ## Compilar las pruebas
 
