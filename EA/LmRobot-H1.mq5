@@ -187,6 +187,7 @@ int OnInit()
    config.strategy = Strategy;
    config.risk     = LmDefaultRiskConfig();
    config.session  = session;
+   config.entryCooldownSeconds = 0; // H1: sin espera de reentrada
 
    config.risk.riskPct             = RiskPct;
    config.risk.riskMode            = RiskMode;

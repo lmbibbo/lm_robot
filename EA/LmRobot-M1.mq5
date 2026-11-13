@@ -12,8 +12,9 @@
 #include "../Include/LmRobot/UI/Dashboard.mqh"
 
 //--- Estrategia y ejecucion
-//--- Defaults = configuracion R11 (P-NS-ALL) con la senal fijada en M1.
-//--- La geometria de riesgo queda igual a R11 hasta calibrar M1.
+//--- Perfil M1: geometria conservadora derivada de la auditoria R12.
+//--- Mantiene la senal en M1, pero el ATR de referencia es H1 para que
+//--- el SL no se encoja con el ruido de un minuto.
 input ENUM_LM_STRATEGY Strategy = LM_STRATEGY_ALL; // Estrategia activa
 input int             MagicNumber = 202611040;     // Magic number de la instancia
 input int             MaxAttempts = 3;             // Intentos maximos por orden
@@ -22,9 +23,9 @@ input int             DeadlineMs = 3000;           // Deadline total por operaci
 
 //--- Contexto de mercado
 input ENUM_TIMEFRAMES SignalTimeframe = PERIOD_M1;  // Timeframe de la senal (barras/RSI)
-input ENUM_TIMEFRAMES AtrTimeframe = PERIOD_CURRENT; // Timeframe del ATR (CURRENT = SignalTimeframe)
+input ENUM_TIMEFRAMES AtrTimeframe = PERIOD_H1;      // Timeframe del ATR (estable en M1)
 input int             AtrPeriod    = 14;             // Periodo del ATR
-input double          MaxSpreadPips = 100.0;         // Spread maximo para entradas (pips)
+input double          MaxSpreadPips = 3.0;           // Spread maximo para entradas (pips)
 input double          MaxAtrPips    = 15.0;          // ATR maximo para entradas (pips)
 input double          AtrSlMultiplier = 1.667;       // Multiplicador de ATR para el SL
 input int             AtrLookback = 50;              // Barras para la media del ATR
@@ -33,24 +34,27 @@ input double          VolFactorMax = 2.0;            // Factor maximo de volatil
 
 //--- Riesgo
 input ENUM_LM_RISK_MODE RiskMode  = LM_RISK_AUTO; // Modalidad inicial del riesgo
-input double AutoRiskMaxPct        = 6.0;    // Tope del riesgo automatico (%)
-input double RiskPct               = 4.0;    // Riesgo base / manual (% del balance)
-input double MaxBasketLossPct      = 1000.0; // Perdida maxima proyectada de la canasta (%)
-input double DailyLossLimitPct     = 1000.0; // Caida diaria maxima de equidad (%)
-input int    MaxGridSteps          = 19;     // Pasos de grid maximos
-input double LotMultiplier         = 1.667;  // Multiplicador de volumen entre pasos
-input double MaxLotPerOrder        = 9.0;    // Volumen maximo por orden
-input double MaxVolumePerStrategy  = 9.0;    // Volumen maximo de la canasta
-input double SlPips                = 1000.0; // SL minimo de la canasta (pips)
+input double AutoRiskMaxPct        = 2.0;    // Tope del riesgo automatico (%)
+input double RiskPct               = 1.0;    // Riesgo base / manual (% del balance)
+input double MaxBasketLossPct      = 20.0;   // Perdida maxima proyectada de la canasta (%)
+input double DailyLossLimitPct     = 6.0;    // Caida diaria maxima de equidad (%)
+input int    MaxGridSteps          = 8;      // Pasos de grid maximos
+input double LotMultiplier         = 1.4;    // Multiplicador de volumen entre pasos
+input double MaxLotPerOrder        = 1.0;    // Volumen maximo por orden
+input double MaxVolumePerStrategy  = 2.0;    // Volumen maximo de la canasta
+input double SlPips                = 30.0;   // SL minimo de la canasta (pips)
 input double TpPips                = 8.0;    // Distancia del TP de canasta (pips)
-input double GridStepPips          = 22.0;   // Distancia para el siguiente paso (pips)
+input double GridStepPips          = 8.0;    // Distancia para el siguiente paso (pips)
 
 //--- Presupuesto agregado de la instancia (modo Strategy=ALL)
-input double MaxAggregateLossPct   = 1000.0; // Perdida agregada de la instancia (%)
-input double MaxAggregateVolume    = 9.0;    // Volumen concurrente agregado (lotes)
+input double MaxAggregateLossPct   = 30.0;   // Perdida agregada de la instancia (%)
+input double MaxAggregateVolume    = 4.0;    // Volumen concurrente agregado (lotes)
+
+//--- Cadencia (M1 genera ~60x mas barras que H1)
+input int    EntryCooldownSeconds  = 1800;   // Espera tras cerrar una canasta (s)
 
 //--- Sesion
-input bool UseSessionFilter = false; // Habilita el filtro de sesion
+input bool UseSessionFilter = true;  // Habilita el filtro de sesion
 input int  SessionStartHour = 8;     // Hora de inicio (servidor)
 input int  SessionEndHour   = 17;    // Hora de fin (servidor, 24 = medianoche)
 
@@ -127,7 +131,8 @@ int OnInit()
       GridStepPips <= 0.0 || MaxSpreadPips <= 0.0 || MaxAtrPips <= 0.0 ||
       MaxAggregateLossPct <= 0.0 || MaxAggregateVolume <= 0.0 ||
       AtrSlMultiplier <= 0.0 || AtrLookback < 1 ||
-      VolFactorMin <= 0.0 || VolFactorMax < VolFactorMin)
+      VolFactorMin <= 0.0 || VolFactorMax < VolFactorMin ||
+      EntryCooldownSeconds < 0)
      {
       Print("LmRobot-M1: parametros de riesgo invalidos");
       return(INIT_FAILED);
@@ -193,6 +198,7 @@ int OnInit()
    config.strategy = Strategy;
    config.risk     = LmDefaultRiskConfig();
    config.session  = session;
+   config.entryCooldownSeconds = EntryCooldownSeconds;
 
    config.risk.riskPct             = RiskPct;
    config.risk.riskMode            = RiskMode;

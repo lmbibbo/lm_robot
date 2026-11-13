@@ -16,7 +16,7 @@ El proyecto vive dentro de la carpeta de datos de un terminal
 ## Layout
 
 ```
-EA/                      Expert Advisors (LmRobot.mq5 referencia, LmRobot-M1.mq5 variante M1)
+EA/                      Expert Advisors (LmRobot-H1.mq5 referencia, LmRobot-M1.mq5 variante M1)
 Include/LmRobot/         Módulos del motor, incluidos con #include
   Core/                  Contexto de mercado, utilidades, snapshot
   Risk/                  Cálculo de lote, límites y guardas
@@ -47,7 +47,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1
 Salida esperada cuando compila bien:
 
 ```
-Compilando: ...\EA\LmRobot.mq5
+Compilando: ...\EA\LmRobot-H1.mq5
 MetaEditor: C:\Program Files\FBS MetaTrader 5\MetaEditor64.exe
 Resultado: 0 error(es), 0 warning(s)
 ```
@@ -61,9 +61,10 @@ devuelve `1`, así que sirve para encadenar en CI.
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Source EA\LmRobot-M1.mq5
 ```
 
-La variante M1 comparte los mismos `Include/LmRobot` que la referencia. La
-diferencia funcional está en el input `SignalTimeframe` (por defecto `PERIOD_M1`)
-y en un `MagicNumber` propio. Detalle en [instancias/m1.md](instancias/m1.md).
+La variante M1 comparte los mismos `Include/LmRobot` que la referencia. Se
+diferencia en el input `SignalTimeframe` (M1), el `AtrTimeframe` (H1), un perfil
+de riesgo conservador, la espera de reentrada `EntryCooldownSeconds` y un
+`MagicNumber` propio. Detalle en [instancias/m1.md](instancias/m1.md).
 
 ## Compilar las pruebas
 

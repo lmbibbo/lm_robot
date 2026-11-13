@@ -204,6 +204,23 @@ public:
   };
 
 //+------------------------------------------------------------------+
+//| Espera minima tras el cierre de una canasta antes de reabrir.    |
+//| Un cooldown de 0 replica el comportamiento sin espera (H1).      |
+//+------------------------------------------------------------------+
+bool LmEntryCooldownElapsed(const datetime lastCloseTime, const datetime now,
+                            const int cooldownSeconds)
+  {
+   if(cooldownSeconds <= 0 || lastCloseTime <= 0)
+      return(true);
+
+   //--- Reloj hacia atras (reinicios, cambios de servidor): no bloquear.
+   if(now < lastCloseTime)
+      return(true);
+
+   return((long)(now - lastCloseTime) >= (long)cooldownSeconds);
+  }
+
+//+------------------------------------------------------------------+
 //| Configuracion del runtime.                                       |
 //+------------------------------------------------------------------+
 struct RuntimeConfig
@@ -212,6 +229,7 @@ struct RuntimeConfig
    ENUM_LM_STRATEGY    strategy;
    RiskConfig          risk;
    SessionConfig       session;
+   int                 entryCooldownSeconds; // 0 = sin espera tras cierre
   };
 
 //+------------------------------------------------------------------+
@@ -266,6 +284,7 @@ public:
    double           realizedPnl;
    double           pnlPeak;
    double           maxDrawdownMoney;
+   datetime         lastCloseTime; // cierre mas reciente; base del cooldown
 
    CStrategySlot()
      {
@@ -291,6 +310,7 @@ public:
       realizedPnl       = 0.0;
       pnlPeak           = 0.0;
       maxDrawdownMoney  = 0.0;
+      lastCloseTime     = 0;
      }
 
    //--- Actualiza el estado y la serie de PnL usada para el DD.
@@ -726,8 +746,16 @@ private:
 
    //--- Primera orden de una canasta nueva.
    bool OpenFirst(CStrategySlot &slot, const int slotIndex,
-                  const double balance)
+                  const double balance, const datetime serverTime)
      {
+      //--- Tras un cierre no se reabre hasta vencer la espera configurada.
+      if(!LmEntryCooldownElapsed(slot.lastCloseTime, serverTime,
+                                 m_config.entryCooldownSeconds))
+        {
+         m_result.lastReason = "cooldown de reentrada activo";
+         return(false);
+        }
+
       ENUM_SIGNAL_DIRECTION signal = SIGNAL_NONE;
       if(!ReadSignal(slot.strategy, signal))
         {
@@ -897,6 +925,7 @@ public:
       m_config.strategy = LM_STRATEGY_SCALPER_PRO;
       m_config.risk     = LmDefaultRiskConfig();
       m_config.session  = LmDefaultSessionConfig();
+      m_config.entryCooldownSeconds = 0;
       LmResetDailyLossState(m_dailyState);
       ResetResult();
      }
@@ -984,6 +1013,7 @@ public:
 
          if(m_slots[i].tracker.JustClosed())
            {
+            m_slots[i].lastCloseTime = serverTime;
             m_slots[i].closures++;
             m_result.closures++;
             PrintFormat("LM_RUNTIME CLOSED strategy=%s magic=%I64d",
@@ -1049,7 +1079,7 @@ public:
          if(m_slots[i].basket.count > 0)
             OpenGrid(m_slots[i], i, balance);
          else
-            OpenFirst(m_slots[i], i, balance);
+            OpenFirst(m_slots[i], i, balance, serverTime);
         }
 
       //--- La exposicion agregada incluye lo abierto en esta misma barra.

@@ -712,6 +712,7 @@ RuntimeConfig MakeRuntimeConfig()
    config.risk     = LmDefaultRiskConfig();
    config.risk.riskMode = LM_RISK_MANUAL;
    config.session  = LmDefaultSessionConfig();
+   config.entryCooldownSeconds = 0;
 
    return(config);
   }
@@ -1053,7 +1054,7 @@ void TestRiskVolatilityScaling()
                      0.06, 1e-9,
                      "el factor de volatilidad escala el lote");
    AssertEqualDouble(LmInitialLot(20000.0, 0.5, 40.0, 10.0, 0.01, 0.01, 100.0),
-                     0.24, 1e-9,
+                     0.25, 1e-9,
                      "el lote es proporcional al balance");
    AssertEqualDouble(LmInitialLot(10000.0, 1.0, 40.0, 10.0, 0.01, 0.01, 100.0),
                      0.25, 1e-9,
@@ -1759,6 +1760,111 @@ void TestRuntimePipeline()
    AssertEqualInt(runtime.Closures(), 1, "el runtime detecta el cierre de la canasta");
    AssertEqualInt(runtime.OrdersSent(), 2,
                   "el tick de cierre no abre una orden nueva en la misma barra");
+  }
+
+//+------------------------------------------------------------------+
+//| 7.5a Cooldown de reentrada: funcion pura.                        |
+//+------------------------------------------------------------------+
+void TestEntryCooldownGate()
+  {
+   datetime now = D'2026.01.02 12:00:00';
+
+   AssertTrue(LmEntryCooldownElapsed(0, now, 1800),
+              "sin cierre previo no hay espera");
+   AssertTrue(LmEntryCooldownElapsed(now, now, 1800) == false,
+              "en el mismo instante del cierre el cooldown bloquea");
+   AssertTrue(LmEntryCooldownElapsed(now - 1799, now, 1800) == false,
+              "antes del limite el cooldown bloquea");
+   AssertTrue(LmEntryCooldownElapsed(now - 1800, now, 1800),
+              "justo al limite el cooldown permite");
+   AssertTrue(LmEntryCooldownElapsed(now - 3600, now, 1800),
+              "pasado el limite el cooldown permite");
+   AssertTrue(LmEntryCooldownElapsed(now - 10, now, 0),
+              "cooldown 0 desactiva la espera");
+   AssertTrue(LmEntryCooldownElapsed(now + 10, now, 1800),
+              "un cierre futuro no bloquea la entrada");
+  }
+
+//+------------------------------------------------------------------+
+//| 7.5b Cooldown de reentrada: bloquea y luego libera el runtime.   |
+//+------------------------------------------------------------------+
+void TestRuntimeEntryCooldown()
+  {
+   CTestBrokerState broker;
+   broker.m_magic  = 111;
+   broker.m_symbol = "TEST5";
+
+   CTestBrokerBackend backend(&broker);
+   CTestBrokerBasketSource baskets(&broker);
+   CTestBarSource bars;
+
+   InstrumentInfo instrument = MakeFiveDigitInstrument();
+   CMarketContext market;
+   AssertTrue(market.InitFromInstrument(instrument, 3.0, 25.0),
+              "el runtime del cooldown inicia con un instrumento de prueba");
+
+   CTestAccountProvider accounts(1000.0, 10.0);
+   CExecutor executor;
+   AssertTrue(executor.Init(&backend, &accounts, MakeRuntimeLimits(),
+                            MakeExecutionConfig(3, 0, 1000)),
+              "el runtime del cooldown inicia con un ejecutor simulado");
+
+   CTestDailyStore store;
+   CDailyLossGuard daily;
+   AssertTrue(daily.Init(&store, 123456, 4.0),
+              "el runtime del cooldown inicia con una guarda diaria");
+
+   RuntimeConfig config = MakeRuntimeConfig();
+   config.entryCooldownSeconds = 1800;
+
+   CLmRuntime runtime;
+   AssertTrue(runtime.Init(&market, &baskets, &bars, &executor, &daily, config),
+              "el runtime del cooldown se inicializa");
+
+   datetime bar1 = D'2026.01.02 10:00:00';
+   bars.Set(bar1, 1.1000, 1.0990);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromTick(1.10000, 1.10002, bar1);
+
+   AssertTrue(runtime.ProcessTick(bar1, 10000.0, 10000.0),
+              "el tick inicial del cooldown se procesa");
+   AssertEqualInt(runtime.OrdersSent(), 1,
+                  "sin cierre previo la primera canasta se abre");
+
+   //--- El take profit cierra la canasta y arranca el cooldown.
+   datetime closeTime = bar1 + 600;
+   broker.SetQuote(1.10085, 1.10087);
+   market.RefreshFromTick(1.10085, 1.10087, closeTime);
+   runtime.ProcessTick(closeTime, 10000.0, 10000.0);
+   AssertEqualInt(broker.Count(), 0,
+                  "el take profit cierra la canasta del cooldown");
+   AssertEqualInt(runtime.Closures(), 1,
+                  "el cooldown arranca con el cierre de la canasta");
+
+   //--- Nueva senal dentro de la ventana: no reabre.
+   datetime bar2 = closeTime + 60;
+   bars.Set(bar2, 1.1000, 1.0990);
+   broker.SetQuote(1.10000, 1.10002);
+   market.RefreshFromTick(1.10000, 1.10002, bar2);
+   runtime.ProcessTick(bar2, 10000.0, 10000.0);
+   AssertEqualInt(runtime.OrdersSent(), 1,
+                  "el cooldown bloquea la reentrada inmediata");
+
+   //--- Un segundo antes del limite sigue bloqueado.
+   datetime bar3 = closeTime + 1799;
+   bars.Set(bar3, 1.1000, 1.0990);
+   market.RefreshFromTick(1.10000, 1.10002, bar3);
+   runtime.ProcessTick(bar3, 10000.0, 10000.0);
+   AssertEqualInt(runtime.OrdersSent(), 1,
+                  "el cooldown sigue activo justo antes del limite");
+
+   //--- Al vencer la espera se permite una canasta nueva.
+   datetime bar4 = closeTime + 1800;
+   bars.Set(bar4, 1.1000, 1.0990);
+   market.RefreshFromTick(1.10000, 1.10002, bar4);
+   runtime.ProcessTick(bar4, 10000.0, 10000.0);
+   AssertEqualInt(runtime.OrdersSent(), 2,
+                  "vencido el cooldown el runtime reabre");
   }
 
 //+------------------------------------------------------------------+
@@ -3094,6 +3200,8 @@ void RunTests()
    TestBarGate();
    TestSessionGuard();
    TestRuntimePipeline();
+   TestEntryCooldownGate();
+   TestRuntimeEntryCooldown();
    TestRuntimeSetRiskPct();
    TestRuntimeRiskAffectsNextGrid();
    TestRuntimeGuardsKeepManaging();

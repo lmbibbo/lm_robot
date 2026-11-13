@@ -9,7 +9,7 @@
     "Result: N errors, M warnings".
 
 .PARAMETER Source
-    Ruta del archivo .mq5 a compilar. Por defecto EA\LmRobot.mq5.
+    Ruta del archivo .mq5 a compilar. Por defecto EA\LmRobot-H1.mq5.
 
 .PARAMETER MetaEditor
     Ruta explicita a MetaEditor64.exe. Si se omite, se detecta desde origin.txt
@@ -70,7 +70,7 @@ function Resolve-MetaEditorPath {
 }
 
 if (-not $Source) {
-    $Source = Join-Path $repoRoot 'EA\LmRobot.mq5'
+    $Source = Join-Path $repoRoot 'EA\LmRobot-H1.mq5'
 }
 elseif (-not [System.IO.Path]::IsPathRooted($Source)) {
     $Source = Join-Path $repoRoot $Source
